@@ -72,6 +72,11 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
     }
   }
 
+  function showLoginForm() {
+    setMode('login')
+    setMessage('')
+  }
+
   if (verificationUser) {
     return (
       <main className="auth-shell">
@@ -93,7 +98,7 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
 
   return (
     <main className="auth-shell">
-      <AccountTools className="auth-toolbar" installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onInstallPromptConsumed={onInstallPromptConsumed} onThemeChange={onThemeChange} themePreference={themePreference} />
+      <AccountTools className="auth-toolbar" installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} loginPage onInstallPromptConsumed={onInstallPromptConsumed} onLogin={showLoginForm} onThemeChange={onThemeChange} themePreference={themePreference} />
       <div className="auth-brand">
         <BrandMark />
         <span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span>

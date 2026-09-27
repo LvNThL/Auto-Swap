@@ -80,6 +80,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .account-tools { border-color: var(--nav-line); background: var(--nav-surface); color: var(--nav-ink); }
 .settings-menu { position: relative; display: flex; }
 .settings-menu-button { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--nav-ink); cursor: pointer; }
+.settings-menu-button-login { border: 2px solid var(--nav-ink); border-radius: 7px; }
+.settings-menu-button-login:focus-visible { outline: 2px solid var(--nav-ink); outline-offset: 2px; }
 .settings-menu-button:hover { background: var(--nav-hover); }
 .settings-menu-button svg { width: 18px; height: 18px; }
 .settings-menu-panel { position: absolute; top: calc(100% + 9px); right: calc(-100% - 6px); z-index: 30; width: min(270px, calc(100vw - 24px)); padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); box-shadow: 0 14px 36px rgba(32,41,35,.16); }

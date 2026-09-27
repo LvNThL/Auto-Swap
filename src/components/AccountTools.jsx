@@ -12,6 +12,8 @@ export default function AccountTools({
   isInstalled,
   isIos,
   onInstallPromptConsumed,
+  loginPage = false,
+  onLogin,
   className = '',
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -47,7 +49,7 @@ export default function AccountTools({
             aria-controls="account-settings-panel"
             aria-expanded={menuOpen}
             aria-label={menuOpen ? 'Close settings menu' : 'Open settings menu'}
-            className="settings-menu-button"
+            className={`settings-menu-button${loginPage ? ' settings-menu-button-login' : ''}`}
             onClick={() => setMenuOpen((open) => !open)}
             ref={buttonRef}
             title="Settings and account"
@@ -67,6 +69,12 @@ export default function AccountTools({
                 <div className="settings-account-row">
                   <span className="settings-account-email" title={user.email}>{user.email || 'Signed in'}</span>
                   <button className="button button-quiet settings-sign-out" onClick={() => { setMenuOpen(false); signOut(auth) }} type="button">Sign out</button>
+                </div>
+              )}
+              {!user && loginPage && (
+                <div className="settings-account-row">
+                  <span className="settings-account-email">Already have an account?</span>
+                  <button className="button button-quiet settings-sign-out" onClick={() => { setMenuOpen(false); onLogin?.() }} type="button">Log in</button>
                 </div>
               )}
             </div>
