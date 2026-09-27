@@ -588,12 +588,14 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         refundAddress: form.refundAddress.trim(),
         refundExtraId: form.refundExtraId.trim(),
       }
-      if (editingPresetId) {
-        await updatePreset(user.uid, editingPresetId, preset)
+      let savedPresetId = editingPresetId
+      if (savedPresetId) {
+        await updatePreset(user.uid, savedPresetId, preset)
       } else {
-        await createPreset(user.uid, preset)
+        savedPresetId = await createPreset(user.uid, preset)
       }
       await refreshPresets()
+      if (savedPresetId) setSelectedId(savedPresetId)
       setQuote(null)
       setConfirming(false)
       setNotice('')
