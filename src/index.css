@@ -113,9 +113,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .route-item { padding: 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; text-align: left; cursor: pointer; }
 .route-item:hover { background: var(--nav-hover); }
 .route-item-active { border-color: var(--nav-line); background: var(--nav-active); box-shadow: 0 4px 18px rgba(32, 41, 35, .035); }
-.route-item-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 600; }
-.route-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
-.route-item-path { display: block; margin-top: 7px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 10px; }
+.route-item-path { display: block; margin-top: 0; color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 10px; }
 .route-item-path b { color: var(--muted); }
 .route-item-mode { display: block; margin-top: 9px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 8px; }
 .empty-routes { margin: 23px 0; color: var(--muted); font-size: 12px; }
@@ -175,7 +173,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .history-main strong span { color: var(--muted); font-weight: 400; }
 .history-main small { overflow-wrap: anywhere; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .history-main code { color: var(--code-ink); font-family: 'IBM Plex Mono', monospace; font-size: 9px; }
-.history-status-controls { display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
+.history-status-controls { display: flex; align-items: center; justify-content: flex-end; justify-self: end; gap: 9px; }
 .history-status { padding: 5px 8px; border-radius: 4px; background: var(--neutral-status-bg); color: var(--neutral-status-ink); font-family: 'IBM Plex Mono', monospace; font-size: 9px; white-space: nowrap; }
 .history-status-pending { background: var(--pending-bg); color: var(--pending-ink); }
 .history-status-finished { background: var(--finished-bg); color: var(--finished-ink); }
@@ -398,14 +396,14 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 }
 @media (max-width: 480px) {
   .account-tools { gap: 5px; }
-  .settings-menu-panel { right: calc(-100% - 8px); }
+  .settings-menu-panel { position: fixed; top: 70px; right: 12px; }
   .theme-selector select { width: 80px; padding-left: 7px; }
   .app-brand { gap: 7px; font-size: 13px; }
   .brand-copy strong { font-size: 12px; }
   .brand-copy small { font-size: 9px; }
   .history-panel { padding: 19px 17px; }
   .history-item { grid-template-columns: 1fr; align-items: start; gap: 10px; }
-  .history-status-controls { justify-content: space-between; }
+  .history-status-controls { justify-content: flex-start; justify-self: start; }
   .route-summary { grid-template-columns: minmax(0,1fr) 64px minmax(0,1fr); }
   .preset-form { grid-template-columns: 1fr; }
   .field-wide { grid-column: auto; }

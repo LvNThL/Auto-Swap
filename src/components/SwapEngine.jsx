@@ -105,16 +105,6 @@ function getDestinationWalletName(preset) {
   return preset.destinationName?.trim() || 'Destination Wallet'
 }
 
-function getPresetName(preset) {
-  const fromCurrency = String(preset.fromCurrency ?? '').toUpperCase()
-  const toCurrency = String(preset.toCurrency ?? '').toUpperCase()
-  const fromNetwork = String(preset.fromNetwork ?? '').toUpperCase()
-  const toNetwork = String(preset.toNetwork ?? '').toUpperCase()
-  const fromAsset = fromCurrency && fromNetwork ? `${fromCurrency} (${fromNetwork})` : fromCurrency
-  const toAsset = toCurrency && toNetwork ? `${toCurrency} (${toNetwork})` : toCurrency
-  return `${fromAsset} to ${toAsset}`
-}
-
 function getErrorMessage(error) {
   if (error?.code === 'functions/permission-denied') return 'Sign in again before creating a swap.'
   if (error?.code === 'functions/invalid-argument') return error.message
@@ -798,7 +788,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                 }}
                 type="button"
               >
-                <span className="route-item-top"><span>{getPresetName(preset)}</span><span className="route-dot" /></span>
                 <span className="route-item-path">{preset.fromCurrency?.toUpperCase()} ({preset.fromNetwork?.toUpperCase()}) → {preset.toCurrency?.toUpperCase()} ({preset.toNetwork?.toUpperCase()})</span>
               </button>
             ))}
@@ -962,7 +951,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           )}
 
           <section className="panel history-panel" aria-labelledby="swap-history-title">
-            <div className="panel-heading"><div><p className="eyebrow">EXCHANGE ACTIVITY</p><h2 id="swap-history-title">Swap History</h2></div><button className="button button-quiet" disabled={historyLoading} onClick={() => { setHistoryError(''); loadSwapHistory().catch(() => setHistoryError('Swap history could not be loaded.')) }} type="button">Refresh history</button></div>
+            <div className="panel-heading"><div><p className="eyebrow">EXCHANGE ACTIVITY</p><h2 id="swap-history-title">Swap History</h2></div></div>
             {historyError && !showNewPreset && <div className="notice notice-warning" role="status">{historyError}</div>}
             {pendingSwaps.length > 0 && <div className="notice notice-warning" role="status">New swaps appear here as Waiting while the deposit tunnel is open. AutoSwap checks their status with ChangeNOW. If the tunnel expires before a deposit is received, it is marked Cancelled. Swaps with a detected deposit remain here through processing and completion.</div>}
             {historyLoading ? <p className="history-empty">Loading exchange activity…</p> : visibleSwapHistory.length === 0 ? <p className="history-empty">Swaps appear here as Waiting when a deposit tunnel opens. If a tunnel expires before a deposit is received, it is marked Cancelled. Once a deposit is detected, the swap remains in history through processing and completion.</p> : (
