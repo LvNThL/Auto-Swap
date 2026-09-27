@@ -82,7 +82,9 @@ function validateExchangeRequest(data = {}) {
   const toNetwork = requiredString(data.toNetwork, 'toNetwork', 32).toLowerCase()
   const fromAmount = requiredString(data.fromAmount, 'fromAmount', 48)
   const toAddress = data.toAddress == null ? undefined : requiredString(data.toAddress, 'toAddress', 256)
-  const toExtraId = data.toExtraId == null ? '' : requiredString(data.toExtraId, 'toExtraId', 256)
+  const toExtraId = data.toExtraId == null || data.toExtraId === ''
+    ? ''
+    : requiredString(data.toExtraId, 'toExtraId', 256)
   const refundAddress = data.refundAddress == null || data.refundAddress === ''
     ? ''
     : requiredString(data.refundAddress, 'refundAddress', 256)
@@ -199,6 +201,27 @@ exports.getSwapCurrencies = onCall(
     cachedCurrencies = currencies
     cachedCurrenciesUntil = Date.now() + CURRENCY_CACHE_TTL_MS
     return { currencies }
+  },
+)
+
+exports.getSwapMinimum = onCall(
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  async (request) => {
+    assertVerifiedUser(request)
+    const exchange = {
+      fromCurrency: requiredString(request.data?.fromCurrency, 'fromCurrency', 32).toLowerCase(),
+      fromNetwork: requiredString(request.data?.fromNetwork, 'fromNetwork', 32).toLowerCase(),
+      toCurrency: requiredString(request.data?.toCurrency, 'toCurrency', 32).toLowerCase(),
+      toNetwork: requiredString(request.data?.toNetwork, 'toNetwork', 32).toLowerCase(),
+    }
+    const minimum = await callChangeNow(`/min-amount?${buildQuery(exchange)}`)
+    const minimumAmount = minimum.minAmount ?? minimum.minimumAmount
+    if ((typeof minimumAmount !== 'string' && typeof minimumAmount !== 'number') ||
+      !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(String(minimumAmount))) {
+      throw new HttpsError('unavailable', 'ChangeNOW returned an invalid minimum-amount response.')
+    }
+
+    return { minimumAmount: String(minimumAmount) }
   },
 )
 

@@ -18,7 +18,7 @@ export default function App() {
   }, [])
 
   if (!isFirebaseConfigured) {
-    return <main className="auth-shell"><div className="auth-brand"><span className="brand-mark">↔</span><span>AutoSwap <i>route desk</i></span></div><section className="auth-panel"><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Firebase.</h1><p className="muted">Set the VITE_FIREBASE_* values in your deployment environment to enable authentication and private route storage.</p></section></main>
+    return <main className="auth-shell"><div className="auth-brand"><span className="brand-mark">↔</span><span>AutoSwap <i>Route Desk</i></span></div><section className="auth-panel"><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Firebase.</h1><p className="muted">Set the VITE_FIREBASE_* values in your deployment environment to enable authentication and private route storage.</p></section></main>
   }
 
   if (!authReady) return <main className="loading-screen">Loading secure workspace…</main>

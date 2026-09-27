@@ -119,6 +119,8 @@ export default function SwapEngine({ user }) {
   const [currenciesLoading, setCurrenciesLoading] = useState(true)
   const [currencyError, setCurrencyError] = useState('')
   const [currencyReloadKey, setCurrencyReloadKey] = useState(0)
+  const [minimumAmount, setMinimumAmount] = useState('')
+  const [minimumStatus, setMinimumStatus] = useState('idle')
   const [addressBookEntries, setAddressBookEntries] = useState([])
   const [addressBookDialog, setAddressBookDialog] = useState('')
   const [addressDraft, setAddressDraft] = useState({ label: '', address: '', extraId: '', ticker: '', network: '', purpose: '' })
@@ -203,6 +205,42 @@ export default function SwapEngine({ user }) {
 
     return () => { active = false }
   }, [user.uid, currencyReloadKey])
+
+  useEffect(() => {
+    if (!showNewPreset || currenciesLoading || !selectedFromCurrency || !selectedToCurrency) {
+      setMinimumAmount('')
+      setMinimumStatus('idle')
+      return undefined
+    }
+
+    let active = true
+    setMinimumAmount('')
+    setMinimumStatus('loading')
+    const timeout = window.setTimeout(() => {
+      const getMinimum = httpsCallable(functions, 'getSwapMinimum')
+      getMinimum({
+        fromCurrency: form.fromCurrency,
+        fromNetwork: form.fromNetwork,
+        toCurrency: form.toCurrency,
+        toNetwork: form.toNetwork,
+      })
+        .then(({ data }) => {
+          if (!active) return
+          setMinimumAmount(data.minimumAmount)
+          setMinimumStatus('ready')
+        })
+        .catch(() => {
+          if (!active) return
+          setMinimumAmount('')
+          setMinimumStatus('error')
+        })
+    }, 300)
+
+    return () => {
+      active = false
+      window.clearTimeout(timeout)
+    }
+  }, [currenciesLoading, form.fromCurrency, form.fromNetwork, form.toCurrency, form.toNetwork, selectedFromCurrency, selectedToCurrency, showNewPreset])
 
   function updateForm(event) {
     const { name, value } = event.target
@@ -503,9 +541,9 @@ export default function SwapEngine({ user }) {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="app-brand" href="./" aria-label="AutoSwap home">
+        <a className="app-brand" href="./" aria-label="AutoSwap Route Desk home">
           <span className="brand-mark" aria-hidden="true">↔</span>
-          <span>AutoSwap <i>route desk</i></span>
+          <span>AutoSwap <i>Route Desk</i></span>
         </a>
         <div className="account-menu">
           <span className="account-email">{user.email}</span>
@@ -539,7 +577,7 @@ export default function SwapEngine({ user }) {
 
         <section className="desk-content">
           <div className="page-heading">
-            <div><p className="eyebrow">SWAP AUTOMATION / PERSONAL</p><h1>Route desk<span>.</span></h1></div>
+            <div><p className="eyebrow">SWAP AUTOMATION / PERSONAL</p><h1>Route Desk</h1></div>
             {selectedPreset && <button className="button button-quiet delete-button" onClick={removePreset} type="button">Delete route</button>}
           </div>
 
@@ -552,7 +590,7 @@ export default function SwapEngine({ user }) {
               <div className="panel-heading"><div><p className="eyebrow">NEW PRESET</p><h2>Route details</h2></div></div>
               <form className="preset-form" onSubmit={savePreset}>
                 <label className="field-wide">Saved preset name<input name="name" value={form.name} onChange={updateForm} placeholder="For example, BTC to ETH" maxLength="48" required /></label>
-                <p className="field-note field-wide">This is just a label to help you find this saved setup later. It does not affect the swap.</p>
+                <p className="field-note field-wide">Use this name to identify the saved route later. It does not affect the swap.</p>
                 <label className="field-wide">Swap direction<select name="fundingMethod" value={form.fundingMethod} onChange={updateForm}><option value="venmo">Venmo → Trust Wallet · send manually</option><option value="trust-wallet">Trust Wallet → Venmo · approve in wallet</option></select></label>
                 {currenciesLoading && <p className="field-note field-wide" role="status">Loading ChangeNOW assets…</p>}
                 {currencyError && <div className="notice notice-error field-wide" role="alert">{currencyError}<button className="button button-quiet" onClick={() => setCurrencyReloadKey((key) => key + 1)} type="button">Reload assets</button></div>}
@@ -586,10 +624,10 @@ export default function SwapEngine({ user }) {
                     styles={assetSelectStyles}
                   />
                 </label>
-                <p className="field-note field-wide" role="status">{fromSearchLower ? `${matchingFromCurrencies.length} matches` : `Popular first · ${fromCurrencies.length.toLocaleString()} sendable assets`}</p>
-                <label className="field-wide">Swap to
+                <p className="field-note field-wide" role="status">{fromSearchLower ? `${matchingFromCurrencies.length} matches` : `Popular first · ${fromCurrencies.length.toLocaleString()} assets available to send`}</p>
+                <label className="field-wide">Receive crypto
                   <Select
-                    aria-label="Swap to"
+                    aria-label="Receive crypto"
                     className="asset-select"
                     classNamePrefix="asset-select"
                     inputId="receive-asset-select"
@@ -620,52 +658,57 @@ export default function SwapEngine({ user }) {
                 <div className="flow-destination field-wide">
                   <span>RECEIVING AT</span>
                   <strong>{form.fundingMethod === 'venmo' ? 'Trust Wallet' : 'Venmo'}</strong>
-                  <p>{form.fundingMethod === 'venmo' ? 'Venmo sends to the ChangeNOW deposit address. ChangeNOW sends the swapped crypto to your Trust Wallet address.' : 'Trust Wallet sends to the ChangeNOW deposit address after you approve. ChangeNOW sends the swapped crypto to your Venmo crypto address.'}</p>
+                  <p>{form.fundingMethod === 'venmo' ? 'Send from Venmo to the ChangeNOW deposit address. ChangeNOW sends the exchanged crypto to your Trust Wallet address.' : 'After you approve the transaction, Trust Wallet sends crypto to the ChangeNOW deposit address. ChangeNOW sends the exchanged crypto to your Venmo crypto address.'}</p>
                 </div>
-                <label>Amount to send ({form.fromCurrency.toUpperCase()})<input name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
-                <p className="field-note field-wide">Enter the {selectedFromCurrency?.ticker.toUpperCase() ?? form.fromCurrency.toUpperCase()} amount you will send to ChangeNOW on {selectedFromCurrency?.network.toUpperCase() ?? form.fromNetwork.toUpperCase()}. The receive amount is estimated separately after you request a quote.</p>
+                <label>Amount to send ({form.fromCurrency.toUpperCase()})<input aria-describedby="minimum-send-note" name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
+                <p className="field-note field-wide" id="minimum-send-note" role="status">
+                  {minimumStatus === 'loading' && 'Checking the minimum for this pair… '}
+                  {minimumStatus === 'ready' && `Minimum send for the selected pair: ${minimumAmount} ${form.fromCurrency.toUpperCase()}. `}
+                  {minimumStatus === 'error' && 'The current minimum is unavailable. ChangeNOW will check it when you request a quote. '}
+                  Enter the amount you plan to send to ChangeNOW. The estimated receive amount appears after you request a quote.
+                </p>
                 <label className="field-wide">{form.fundingMethod === 'venmo' ? 'Trust Wallet receiving address' : 'Venmo crypto receiving address'}<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder={form.fundingMethod === 'venmo' ? 'Paste your Trust Wallet address' : 'Paste the crypto address shown in Venmo'} required /></label>
                 {selectedToCurrency?.hasExternalId && <label className="field-wide">Destination memo or tag<input name="destinationExtraId" value={form.destinationExtraId} onChange={updateForm} autoComplete="off" placeholder="Required by this asset" required /></label>}
                 <div className="address-tools field-wide">
-                  <select aria-label="Load saved destination address" value="" onChange={(event) => loadAddress('destination', event.target.value)}>
-                    <option value="">Load saved destination address…</option>
+                  <select aria-label="Load a saved destination address" value="" onChange={(event) => loadAddress('destination', event.target.value)}>
+                    <option value="">Load a saved destination address…</option>
                     {destinationAddressEntries.map((entry) => <option value={entry.id} key={entry.id}>{entry.label}</option>)}
                   </select>
-                  <button className="button button-quiet" onClick={() => beginSaveAddress('destination')} type="button">Save destination</button>
+                  <button className="button button-quiet" onClick={() => beginSaveAddress('destination')} type="button">Save destination address</button>
                   <button className="button button-quiet" onClick={() => setAddressBookDialog('manage')} type="button">Manage address book</button>
                 </div>
-                <label className="field-wide">Refund address <span className="optional-label">Optional · used if the exchange refunds this swap</span><input name="refundAddress" value={form.refundAddress} onChange={updateForm} autoComplete="off" placeholder="Crypto address on the send network" /></label>
+                <label className="field-wide">Refund address <span className="optional-label">Optional. Used only if the exchange refunds the swap.</span><input name="refundAddress" value={form.refundAddress} onChange={updateForm} autoComplete="off" placeholder="Crypto address on the send network" /></label>
                 {selectedFromCurrency?.hasExternalId && <label className="field-wide">Refund memo or tag<input name="refundExtraId" value={form.refundExtraId} onChange={updateForm} autoComplete="off" placeholder="Optional refund memo or tag" /></label>}
                 <div className="address-tools field-wide">
-                  <select aria-label="Load saved refund address" value="" onChange={(event) => loadAddress('refund', event.target.value)}>
-                    <option value="">Load saved refund address…</option>
+                  <select aria-label="Load a saved refund address" value="" onChange={(event) => loadAddress('refund', event.target.value)}>
+                    <option value="">Load a saved refund address…</option>
                     {refundAddressEntries.map((entry) => <option value={entry.id} key={entry.id}>{entry.label}</option>)}
                   </select>
                   <button className="button button-quiet" onClick={() => beginSaveAddress('refund')} type="button">Save refund address</button>
                 </div>
-                <p className="field-note field-wide">Venmo supports only certain coins and networks; make sure your Venmo account can send the selected asset. Wallet automation is limited to supported native EVM coins. The quoted pair is checked with ChangeNOW before you confirm.</p>
+                <p className="field-note field-wide">Venmo supports only certain coins and networks. Confirm that your account can send the selected asset. Wallet automation supports native EVM coins on supported networks. ChangeNOW checks the selected pair before you confirm.</p>
                 <div className="form-actions field-wide"><button className="button button-quiet" onClick={() => setShowNewPreset(false)} type="button">Cancel</button><button className="button button-primary" disabled={currenciesLoading || !selectedFromCurrency?.canSell || !selectedToCurrency?.canBuy} type="submit">Save preset</button></div>
               </form>
             </section>
           )}
 
           {!selectedPreset && !showNewPreset && (
-            <section className="empty-state"><div className="empty-glyph" aria-hidden="true">↗</div><p className="eyebrow">READY WHEN YOU ARE</p><h2>Create your first route.</h2><p>Save the currencies, networks, amount, and destination address you use regularly.</p><button className="button button-primary" onClick={() => setShowNewPreset(true)} type="button">Create a route <span aria-hidden="true">+</span></button></section>
+            <section className="empty-state"><div className="empty-glyph" aria-hidden="true">↗</div><p className="eyebrow">READY WHEN YOU ARE</p><h2>Create your first route.</h2><p>Save your swap details and destination addresses for easy reuse.</p><button className="button button-primary" onClick={() => setShowNewPreset(true)} type="button">Create a route <span aria-hidden="true">+</span></button></section>
           )}
 
           {selectedPreset && !showNewPreset && (
             <>
               <section className="route-summary">
-                <div className="summary-origin"><span className="summary-label">FROM</span><strong>{selectedPreset.fundingMethod === 'venmo' ? 'Venmo' : 'Trust Wallet'}</strong><small>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} · {selectedPreset.fromNetwork}</small></div>
-                <div className="summary-connector"><span>CHANGE NOW</span><div><i /><i /><i /><i /><i /></div></div>
-                <div className="summary-destination"><span className="summary-label">TO</span><strong>{selectedPreset.fundingMethod === 'venmo' ? 'Trust Wallet' : 'Venmo'}</strong><small>{selectedPreset.toCurrency?.toUpperCase()} · {selectedPreset.toNetwork}</small></div>
+                <div className="summary-origin"><span className="summary-label">FROM</span><strong>{selectedPreset.fundingMethod === 'venmo' ? 'Venmo' : 'Trust Wallet'}</strong><small>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} · {selectedPreset.fromNetwork?.toUpperCase()}</small></div>
+                <div className="summary-connector"><span>ChangeNOW</span><div><i /><i /><i /><i /><i /></div></div>
+                <div className="summary-destination"><span className="summary-label">TO</span><strong>{selectedPreset.fundingMethod === 'venmo' ? 'Trust Wallet' : 'Venmo'}</strong><small>{selectedPreset.toCurrency?.toUpperCase()} · {selectedPreset.toNetwork?.toUpperCase()}</small></div>
               </section>
               <section className="panel active-route-panel">
                 <div className="panel-heading"><div><p className="eyebrow">ACTIVE PRESET</p><h2>{selectedPreset.name}</h2></div><span className="panel-index">01 / ROUTE</span></div>
                 <div className="detail-grid">
                   <div><span>Send amount</span><strong>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()}</strong></div>
-                  <div><span>Deposit network</span><strong>{selectedPreset.fromNetwork}</strong></div>
-                  <div><span>Destination network</span><strong>{selectedPreset.toNetwork}</strong></div>
+                  <div><span>Deposit network</span><strong>{selectedPreset.fromNetwork?.toUpperCase()}</strong></div>
+                  <div><span>Destination network</span><strong>{selectedPreset.toNetwork?.toUpperCase()}</strong></div>
                   <div><span>Delivery address</span><strong className="address-value">{selectedPreset.destinationAddress}</strong></div>
                 </div>
                 <div className="panel-footer"><p>ChangeNOW checks the current minimum and estimates the receive amount before any deposit tunnel is created.</p><button className="button button-primary" disabled={busy} onClick={requestQuote} type="button">{busy ? 'Getting quote…' : 'Review swap'} <span aria-hidden="true">↗</span></button></div>
@@ -678,9 +721,9 @@ export default function SwapEngine({ user }) {
           {tunnel && (
             <section className="panel tunnel-panel">
               <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap tunnel ready</h2></div><span className="live-badge">LIVE</span></div>
-              <p className="field-note">Send only {selectedPreset?.fromCurrency?.toUpperCase()} on {selectedPreset?.fromNetwork}. Sending another asset or network can permanently lose funds.</p>
+              <p className="field-note">Send only {selectedPreset?.fromCurrency?.toUpperCase()} on {selectedPreset?.fromNetwork?.toUpperCase()}. Sending another asset or network can permanently lose funds.</p>
               <div className="deposit-address"><span>Deposit address</span><code>{tunnel.payinAddress}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinAddress)} type="button">Copy address</button></div>
-              {tunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{tunnel.payinExtraId}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinExtraId)} type="button">Copy memo</button></div>}
+              {tunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{tunnel.payinExtraId}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinExtraId)} type="button">Copy memo or tag</button></div>}
               {tunnel.transactionHash && <div className="transaction-hash"><span>Wallet transaction</span><code>{tunnel.transactionHash}</code></div>}
               {tunnel.id && <p className="field-note">Exchange ID: {tunnel.id}</p>}
             </section>
@@ -695,9 +738,9 @@ export default function SwapEngine({ user }) {
             <h2 id="address-book-title">{addressBookDialog === 'save' ? 'Save address' : 'Address book'}</h2>
             {addressBookDialog === 'save' ? (
               <form className="address-save-form" onSubmit={saveAddress}>
-                <p className="muted">{addressDraft.ticker.toUpperCase()} on {addressDraft.network.toUpperCase()} · {addressDraft.purpose === 'destination' ? 'destination' : 'refund'} address</p>
+                <p className="muted">{addressDraft.ticker.toUpperCase()} on {addressDraft.network.toUpperCase()} · {addressDraft.purpose === 'destination' ? 'Destination' : 'Refund'} address</p>
                 <label>Address label<input autoFocus maxLength="48" onChange={(event) => setAddressDraft((draft) => ({ ...draft, label: event.target.value }))} placeholder="For example, Main wallet" required value={addressDraft.label} /></label>
-                <div className="address-preview"><code>{addressDraft.address}</code>{addressDraft.extraId && <small>Memo/tag: {addressDraft.extraId}</small>}</div>
+                <div className="address-preview"><code>{addressDraft.address}</code>{addressDraft.extraId && <small>Memo or tag: {addressDraft.extraId}</small>}</div>
                 <div className="form-actions"><button className="button button-quiet" onClick={() => setAddressBookDialog('')} type="button">Cancel</button><button className="button button-primary" disabled={addressBookBusy} type="submit">{addressBookBusy ? 'Saving…' : 'Save address'}</button></div>
               </form>
             ) : (
@@ -706,7 +749,7 @@ export default function SwapEngine({ user }) {
                   ? <p className="muted">No saved addresses yet.</p>
                   : <ul className="address-book-list">{addressBookEntries.map((entry) => (
                     <li className="address-book-item" key={entry.id}>
-                      <div><strong>{entry.label}</strong><span>{entry.ticker.toUpperCase()} · {entry.network.toUpperCase()} · {entry.purpose}</span><code>{entry.address}</code>{entry.extraId && <small>Memo/tag: {entry.extraId}</small>}</div>
+                      <div><strong>{entry.label}</strong><span>{entry.ticker.toUpperCase()} · {entry.network.toUpperCase()} · {entry.purpose}</span><code>{entry.address}</code>{entry.extraId && <small>Memo or tag: {entry.extraId}</small>}</div>
                       <button className="button button-quiet" disabled={addressBookBusy} onClick={() => removeAddress(entry)} type="button">Remove</button>
                     </li>
                   ))}</ul>}
@@ -724,8 +767,8 @@ export default function SwapEngine({ user }) {
             <h2 id="confirm-title">Confirm this route?</h2>
             <p className="muted">Review the live estimate before creating a deposit tunnel. This quote expires at {new Date(quote.quoteExpiresAt).toLocaleTimeString()}.</p>
             <dl className="confirmation-list">
-              <div><dt>Send</dt><dd>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} on {selectedPreset.fromNetwork}</dd></div>
-              <div><dt>Receive</dt><dd>{selectedPreset.toCurrency?.toUpperCase()} on {selectedPreset.toNetwork}</dd></div>
+              <div><dt>Send</dt><dd>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} on {selectedPreset.fromNetwork?.toUpperCase()}</dd></div>
+              <div><dt>Receive</dt><dd>{selectedPreset.toCurrency?.toUpperCase()} on {selectedPreset.toNetwork?.toUpperCase()}</dd></div>
               <div><dt>Estimated receive</dt><dd>{quote.estimatedAmount} {selectedPreset.toCurrency?.toUpperCase()}</dd></div>
               {estimatedRate && <div><dt>Estimated rate</dt><dd><code>{estimatedRate}</code><br />Based on this quote and send amount; not a fixed rate.</dd></div>}
               <div><dt>Minimum send</dt><dd>{quote.minimumAmount} {selectedPreset.fromCurrency?.toUpperCase()}</dd></div>
@@ -735,7 +778,7 @@ export default function SwapEngine({ user }) {
               {selectedPreset.refundExtraId && <div><dt>Refund memo or tag</dt><dd><code>{selectedPreset.refundExtraId}</code></dd></div>}
             </dl>
             {quote.warningMessage && <p className="modal-warning">{quote.warningMessage}</p>}
-            <p className="modal-warning">This standard-flow estimate is indicative and may change. Confirming creates the exchange; your wallet will separately ask approval before sending any funds.</p>
+            <p className="modal-warning">This standard-flow estimate is indicative and may change. Confirming creates the exchange. Your wallet will ask for separate approval before sending funds.</p>
             <div className="form-actions"><button className="button button-quiet" onClick={() => setConfirming(false)} type="button">Go back</button><button className="button button-primary" disabled={busy} onClick={confirmSwap} type="button">{busy ? 'Creating tunnel…' : 'Confirm & create tunnel'}</button></div>
           </section>
         </div>

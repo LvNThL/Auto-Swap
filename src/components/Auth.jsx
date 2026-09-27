@@ -59,7 +59,7 @@ export default function Auth({ verificationUser }) {
         await verificationUser.getIdToken(true)
         window.location.reload()
       } else {
-        setMessage('Email is not verified yet. Open the link from your inbox first.')
+        setMessage('Your email is not verified yet. Open the verification link in your inbox first.')
       }
     } catch {
       setMessage('Verification status could not be checked. Try again.')
@@ -69,14 +69,14 @@ export default function Auth({ verificationUser }) {
   if (verificationUser) {
     return (
       <main className="auth-shell">
-        <div className="auth-brand"><span className="brand-mark" aria-hidden="true">↔</span><span>AutoSwap <i>route desk</i></span></div>
+        <div className="auth-brand"><span className="brand-mark" aria-hidden="true">↔</span><span>AutoSwap <i>Route Desk</i></span></div>
         <section className="auth-panel">
           <p className="eyebrow">VERIFY YOUR EMAIL</p>
           <h1>One more step.</h1>
           <p className="muted">Open the verification link sent to {verificationUser.email}. Swap routes stay locked until your email is verified.</p>
           {message && <p className="form-message" role="status">{message}</p>}
           <div className="form-stack">
-            <button className="button button-primary" onClick={checkVerification} type="button">I verified my email</button>
+            <button className="button button-primary" onClick={checkVerification} type="button">I’ve verified my email</button>
             <button className="button button-quiet" onClick={resendVerification} type="button">Resend verification email</button>
             <button className="text-button" onClick={() => signOut(auth)} type="button">Sign out</button>
           </div>
@@ -89,7 +89,7 @@ export default function Auth({ verificationUser }) {
     <main className="auth-shell">
       <div className="auth-brand">
         <span className="brand-mark" aria-hidden="true">↔</span>
-        <span>AutoSwap <i>route desk</i></span>
+        <span>AutoSwap <i>Route Desk</i></span>
       </div>
       <section className="auth-panel">
         <p className="eyebrow">PRIVATE WORKSPACE</p>
