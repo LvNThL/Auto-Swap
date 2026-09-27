@@ -980,6 +980,15 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                         <small>{swap.fromAmount} {swap.fromCurrency?.toUpperCase()} ({swap.fromNetwork?.toUpperCase()}) → {swap.toCurrency?.toUpperCase()} ({swap.toNetwork?.toUpperCase()})</small>
                         <small>{swap.createdAt ? new Date(swap.createdAt).toLocaleString() : 'Date unavailable'}{swap.toAmount ? ` · ${status === 'finished' ? 'Received' : 'Est. receive'} ${swap.toAmount} ${swap.toCurrency?.toUpperCase()}` : ''}</small>
                         {swap.exchangeId && <small>Exchange ID: <code>{swap.exchangeId}</code></small>}
+                        <small>{swap.networkFee != null
+                          ? `Network fee: ${swap.networkFee}${swap.networkFeeCurrency ? ` ${swap.networkFeeCurrency.toUpperCase()}` : ' (currency not reported)'}`
+                          : `Network fee: ${swap.pending ? 'not available yet' : 'not reported by ChangeNOW'}`}</small>
+                        {(swap.payinExplorerUrl || swap.payoutExplorerUrl) && (
+                          <div className="history-blockchain-links">
+                            {swap.payinExplorerUrl && <a className="history-blockchain-link" href={swap.payinExplorerUrl} rel="noopener noreferrer" target="_blank">View deposit on blockchain</a>}
+                            {swap.payoutExplorerUrl && <a className="history-blockchain-link" href={swap.payoutExplorerUrl} rel="noopener noreferrer" target="_blank">View payout on blockchain</a>}
+                          </div>
+                        )}
                       </div>
                       <div className="history-status-controls">
                         <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status)}</span>

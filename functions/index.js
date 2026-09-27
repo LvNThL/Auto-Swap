@@ -5,6 +5,7 @@ const { getFirestore, Timestamp } = require('firebase-admin/firestore')
 const { quoteMatchesExchange, quoteMatchesPreset, quoteExpired } = require('./quote-validation')
 const { normalizeCurrencyCatalog } = require('./currency-catalog')
 const { depositReceived, pendingHistoryStatus } = require('./swap-history-status')
+const { extractTransactionHistoryDetails } = require('./transaction-history-details')
 const {
   MAX_ADDRESS_BOOK_ENTRIES_PER_USER,
   MAX_DAILY_SAVED_RECORD_WRITES,
@@ -65,6 +66,12 @@ function serializeSwapHistory(snapshot) {
     toCurrency: record.toCurrency,
     toNetwork: record.toNetwork,
     toAmount: record.toAmount ?? null,
+    networkFee: record.networkFee ?? null,
+    networkFeeCurrency: record.networkFeeCurrency ?? null,
+    payinHash: record.payinHash ?? null,
+    payoutHash: record.payoutHash ?? null,
+    payinExplorerUrl: record.payinExplorerUrl ?? null,
+    payoutExplorerUrl: record.payoutExplorerUrl ?? null,
     status: record.status ?? 'unknown',
     createdAt: record.createdAt?.toMillis() ?? null,
     updatedAt: record.updatedAt?.toMillis() ?? null,
@@ -526,6 +533,10 @@ exports.createSwapTunnel = onCall(
     }
 
     const exchangeId = result.id ?? result.exchangeId ?? null
+    const transactionDetails = extractTransactionHistoryDetails(result, {
+      fromNetwork: exchange.fromNetwork,
+      toNetwork: exchange.toNetwork,
+    })
     const tunnelOpenedAt = Date.now()
     const accessExpiresAt = tunnelOpenedAt + TUNNEL_ACCESS_TTL_MS
     let trackingSaved = false
@@ -537,6 +548,7 @@ exports.createSwapTunnel = onCall(
           trackingStatus: 'pending',
           payinAddress,
           payinExtraId: result.payinExtraId ?? null,
+          ...transactionDetails,
           tunnelOpenedAt: Timestamp.fromMillis(tunnelOpenedAt),
           tunnelAccessExpiresAt: Timestamp.fromMillis(accessExpiresAt),
           updatedAt: Timestamp.fromMillis(tunnelOpenedAt),
@@ -588,6 +600,12 @@ exports.getSwapHistory = onCall(
         toCurrency: pendingDoc.get('toCurrency'),
         toNetwork: pendingDoc.get('toNetwork'),
         estimatedAmount: pendingDoc.get('estimatedAmount') ?? null,
+        networkFee: pendingDoc.get('networkFee') ?? null,
+        networkFeeCurrency: pendingDoc.get('networkFeeCurrency') ?? null,
+        payinHash: pendingDoc.get('payinHash') ?? null,
+        payoutHash: pendingDoc.get('payoutHash') ?? null,
+        payinExplorerUrl: pendingDoc.get('payinExplorerUrl') ?? null,
+        payoutExplorerUrl: pendingDoc.get('payoutExplorerUrl') ?? null,
         createdAt: pendingDoc.get('tunnelOpenedAt')?.toMillis() ?? pendingDoc.get('createdAt')?.toMillis() ?? null,
         accessExpiresAt: pendingDoc.get('tunnelAccessExpiresAt')?.toMillis() ?? null,
       })),
@@ -626,6 +644,10 @@ exports.refreshSwapStatus = onCall(
     if (typeof result.status !== 'string' || !result.status.trim()) {
       throw new HttpsError('unavailable', 'ChangeNOW did not return a transaction status.')
     }
+    const transactionDetails = extractTransactionHistoryDetails(result, {
+      fromNetwork: savedRecord.fromNetwork,
+      toNetwork: savedRecord.toNetwork,
+    })
 
     if (pendingDoc) {
       const status = result.status.toLowerCase()
@@ -643,6 +665,7 @@ exports.refreshSwapStatus = onCall(
             toCurrency: pendingRecord.toCurrency,
             toNetwork: pendingRecord.toNetwork,
             toAmount: result.toAmount == null ? pendingRecord.estimatedAmount ?? null : String(result.toAmount),
+            ...transactionDetails,
             status: result.status,
             createdAt: pendingRecord.tunnelOpenedAt ?? pendingRecord.createdAt ?? Timestamp.fromMillis(Date.now()),
             updatedAt: Timestamp.fromMillis(Date.now()),
@@ -671,6 +694,7 @@ exports.refreshSwapStatus = onCall(
             toCurrency: pendingRecord.toCurrency,
             toNetwork: pendingRecord.toNetwork,
             toAmount: pendingRecord.estimatedAmount ?? null,
+            ...transactionDetails,
             status: pendingHistoryStatus(result.status),
             createdAt: pendingRecord.tunnelOpenedAt ?? pendingRecord.createdAt ?? now,
             updatedAt: now,
@@ -684,13 +708,14 @@ exports.refreshSwapStatus = onCall(
           : { exchangeId, status: 'cancelled', pending: true }
       }
 
-      await pendingDoc.ref.update({ status: result.status, updatedAt: Timestamp.fromMillis(Date.now()) })
-      return { id: pendingDoc.id, exchangeId, status: result.status, pending: true }
+      await pendingDoc.ref.update({ ...transactionDetails, status: result.status, updatedAt: Timestamp.fromMillis(Date.now()) })
+      return { id: pendingDoc.id, exchangeId, status: result.status, ...transactionDetails, pending: true }
     }
 
     await historyDoc.ref.update({
       status: result.status,
       ...(result.toAmount == null ? {} : { toAmount: String(result.toAmount) }),
+      ...transactionDetails,
       updatedAt: Timestamp.fromMillis(Date.now()),
     })
 

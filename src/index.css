@@ -173,6 +173,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .history-main strong span { color: var(--muted); font-weight: 400; }
 .history-main small { overflow-wrap: anywhere; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .history-main code { color: var(--code-ink); font-family: 'IBM Plex Mono', monospace; font-size: 9px; }
+.history-blockchain-links { display: flex; flex-wrap: wrap; gap: 12px; }
+.history-blockchain-link { color: var(--text-button-ink); font-size: 9px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .history-status-controls { display: flex; align-items: center; justify-content: flex-end; justify-self: end; gap: 9px; }
 .history-status { padding: 5px 8px; border-radius: 4px; background: var(--neutral-status-bg); color: var(--neutral-status-ink); font-family: 'IBM Plex Mono', monospace; font-size: 9px; white-space: nowrap; }
 .history-status-pending { background: var(--pending-bg); color: var(--pending-ink); }
