@@ -50,7 +50,7 @@ const assetSelectStyles = {
     fontSize: 12,
     ':hover': { borderColor: 'var(--muted)' },
   }),
-  placeholder: (base) => ({ ...base, color: 'var(--placeholder)' }),
+  placeholder: (base) => ({ ...base, color: 'var(--asset-placeholder)' }),
   menuPortal: (base) => ({ ...base, zIndex: 30 }),
   menu: (base) => ({ ...base, zIndex: 30, overflow: 'hidden', border: '1px solid var(--line)', borderRadius: 6, backgroundColor: 'var(--paper)' }),
   menuList: (base) => ({ ...base, maxHeight: 260, overflowY: 'auto', scrollbarWidth: 'thin' }),
