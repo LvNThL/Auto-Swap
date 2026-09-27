@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
 import Auth from './components/Auth.jsx'
+import InstallAppControl from './components/InstallAppControl.jsx'
 import ThemeSelector from './components/ThemeSelector.jsx'
 import { auth, isFirebaseConfigured } from './firebase.js'
 
@@ -15,10 +16,39 @@ function getSavedTheme() {
   }
 }
 
+function isIosDevice() {
+  return /iphone|ipad|ipod/i.test(window.navigator.userAgent) ||
+    (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1)
+}
+
 export default function App() {
   const [user, setUser] = useState(null)
   const [authReady, setAuthReady] = useState(false)
   const [themePreference, setThemePreference] = useState(getSavedTheme)
+  const [installPrompt, setInstallPrompt] = useState(null)
+  const [isInstalled, setIsInstalled] = useState(false)
+
+  useEffect(() => {
+    const standalone = window.matchMedia('(display-mode: standalone)')
+    setIsInstalled(standalone.matches || window.navigator.standalone === true)
+
+    function captureInstallPrompt(event) {
+      event.preventDefault()
+      setInstallPrompt(event)
+    }
+
+    function markInstalled() {
+      setIsInstalled(true)
+      setInstallPrompt(null)
+    }
+
+    window.addEventListener('beforeinstallprompt', captureInstallPrompt)
+    window.addEventListener('appinstalled', markInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', captureInstallPrompt)
+      window.removeEventListener('appinstalled', markInstalled)
+    }
+  }, [])
 
   useEffect(() => {
     const systemPreference = window.matchMedia('(prefers-color-scheme: dark)')
@@ -45,12 +75,12 @@ export default function App() {
   }, [])
 
   if (!isFirebaseConfigured) {
-    return <main className="auth-shell"><ThemeSelector className="auth-theme-selector" onChange={setThemePreference} value={themePreference} /><div className="auth-brand"><span className="brand-mark">↔</span><span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span></div><section className="auth-panel"><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Firebase.</h1><p className="muted">Set the VITE_FIREBASE_* values in your deployment environment to enable authentication and private route storage.</p></section></main>
+    return <main className="auth-shell"><InstallAppControl className="auth-install-control" installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIosDevice()} onPromptConsumed={() => setInstallPrompt(null)} /><ThemeSelector className="auth-theme-selector" onChange={setThemePreference} value={themePreference} /><div className="auth-brand"><span className="brand-mark">↔</span><span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span></div><section className="auth-panel"><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Firebase.</h1><p className="muted">Set the VITE_FIREBASE_* values in your deployment environment to enable authentication and private route storage.</p></section></main>
   }
 
   if (!authReady) return <main className="loading-screen">Loading secure workspace…</main>
-  if (user && !user.emailVerified) return <Auth onThemeChange={setThemePreference} themePreference={themePreference} verificationUser={user} />
+  if (user && !user.emailVerified) return <Auth installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIosDevice()} onInstallPromptConsumed={() => setInstallPrompt(null)} onThemeChange={setThemePreference} themePreference={themePreference} verificationUser={user} />
   return user
-    ? <Suspense fallback={<main className="loading-screen">Loading secure workspace…</main>}><SwapEngine key={user.uid} onThemeChange={setThemePreference} themePreference={themePreference} user={user} /></Suspense>
-    : <Auth onThemeChange={setThemePreference} themePreference={themePreference} />
+    ? <Suspense fallback={<main className="loading-screen">Loading secure workspace…</main>}><SwapEngine installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIosDevice()} key={user.uid} onInstallPromptConsumed={() => setInstallPrompt(null)} onThemeChange={setThemePreference} themePreference={themePreference} user={user} /></Suspense>
+    : <Auth installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIosDevice()} onInstallPromptConsumed={() => setInstallPrompt(null)} onThemeChange={setThemePreference} themePreference={themePreference} />
 }

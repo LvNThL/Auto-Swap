@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import InstallAppControl from './InstallAppControl.jsx'
 import ThemeSelector from './ThemeSelector.jsx'
 import {
   browserLocalPersistence,
@@ -11,7 +12,7 @@ import {
 } from 'firebase/auth'
 import { auth } from '../firebase.js'
 
-export default function Auth({ verificationUser, themePreference, onThemeChange }) {
+export default function Auth({ verificationUser, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed }) {
   const [mode, setMode] = useState('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -75,6 +76,7 @@ export default function Auth({ verificationUser, themePreference, onThemeChange 
   if (verificationUser) {
     return (
       <main className="auth-shell">
+        <InstallAppControl className="auth-install-control" installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
         <ThemeSelector className="auth-theme-selector" onChange={onThemeChange} value={themePreference} />
         <div className="auth-brand"><span className="brand-mark" aria-hidden="true">↔</span><span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span></div>
         <section className="auth-panel">
@@ -94,6 +96,7 @@ export default function Auth({ verificationUser, themePreference, onThemeChange 
 
   return (
     <main className="auth-shell">
+      <InstallAppControl className="auth-install-control" installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
       <ThemeSelector className="auth-theme-selector" onChange={onThemeChange} value={themePreference} />
       <div className="auth-brand">
         <span className="brand-mark" aria-hidden="true">↔</span>

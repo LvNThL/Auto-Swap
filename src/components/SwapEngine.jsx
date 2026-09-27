@@ -3,6 +3,7 @@ import { httpsCallable } from 'firebase/functions'
 import { signOut } from 'firebase/auth'
 import Select from 'react-select'
 import { auth, functions, isFirebaseConfigured } from '../firebase.js'
+import InstallAppControl from './InstallAppControl.jsx'
 import ThemeSelector from './ThemeSelector.jsx'
 import {
   createAddressBookEntry,
@@ -114,7 +115,7 @@ function formatSwapStatus(status) {
 
 const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired'])
 
-export default function SwapEngine({ user, themePreference, onThemeChange }) {
+export default function SwapEngine({ user, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed }) {
   const [presets, setPresets] = useState([])
   const [currencies, setCurrencies] = useState([])
   const [currenciesLoading, setCurrenciesLoading] = useState(true)
@@ -614,6 +615,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange }) {
           <span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span>
         </a>
         <div className="account-menu">
+          <InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
           <ThemeSelector onChange={onThemeChange} value={themePreference} />
           <span className="account-email">{user.email}</span>
           <button className="button button-quiet" onClick={() => signOut(auth)} type="button">Sign out</button>
