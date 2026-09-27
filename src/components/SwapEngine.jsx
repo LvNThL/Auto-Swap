@@ -105,6 +105,16 @@ function getDestinationWalletName(preset) {
   return preset.destinationName?.trim() || 'Destination Wallet'
 }
 
+function getPresetName(preset) {
+  const fromCurrency = String(preset.fromCurrency ?? '').toUpperCase()
+  const toCurrency = String(preset.toCurrency ?? '').toUpperCase()
+  const fromNetwork = String(preset.fromNetwork ?? '').toUpperCase()
+  const toNetwork = String(preset.toNetwork ?? '').toUpperCase()
+  const fromAsset = fromCurrency && fromNetwork ? `${fromCurrency} (${fromNetwork})` : fromCurrency
+  const toAsset = toCurrency && toNetwork ? `${toCurrency} (${toNetwork})` : toCurrency
+  return `${fromAsset} to ${toAsset}`
+}
+
 function getErrorMessage(error) {
   if (error?.code === 'functions/permission-denied') return 'Sign in again before creating a swap.'
   if (error?.code === 'functions/invalid-argument') return error.message
