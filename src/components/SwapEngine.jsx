@@ -27,7 +27,7 @@ const emptyPreset = {
   refundExtraId: '',
 }
 
-const TUNNEL_ACCESS_TTL_MS = 5 * 60 * 1000
+const TUNNEL_ACCESS_TTL_MS = 10 * 60 * 1000
 
 function currencyGroups(currencies) {
   const featured = currencies.filter((currency) => currency.featured)
@@ -953,7 +953,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           {activeTunnel && !showNewPreset && (
             <section className="panel tunnel-panel">
               <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap Tunnel Ready</h2></div><span className="live-badge">EXPIRES IN {formatTunnelTimeRemaining(activeTunnel.accessExpiresAt, clockNow)}</span></div>
-              <p className="field-note">This deposit tunnel is available here for 5 minutes. Access ends in {formatTunnelTimeRemaining(activeTunnel.accessExpiresAt, clockNow)}; complete your transfer before then.</p>
+              <p className="field-note">This deposit tunnel is available here for 10 minutes. Access ends in {formatTunnelTimeRemaining(activeTunnel.accessExpiresAt, clockNow)}; complete your transfer before then.</p>
               {tunnelNotice && <div className="notice notice-success" role="status">{tunnelNotice}</div>}
               <p className="field-note">Send only {(activeTunnelPreset ?? selectedPreset)?.fromCurrency?.toUpperCase()} on {(activeTunnelPreset ?? selectedPreset)?.fromNetwork?.toUpperCase()} from {getSourceWalletName(activeTunnelPreset ?? selectedPreset)}. Sending another asset or network can permanently lose funds.</p>
               <div className="notice notice-warning single-use-warning">Use this deposit address once for this exchange only. Never reuse it for another quote or swap. Send the exact asset on the exact network shown above.</div>
