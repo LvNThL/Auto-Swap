@@ -18,10 +18,11 @@ For WalletConnect, create a WalletConnect Cloud project and set `VITE_WALLETCONN
 ## Route behavior and limits
 
 - New routes load non-fiat assets from ChangeNOW's active standard-flow currency catalog. Each option includes its network, so the same ticker on different chains is selected separately. Quote requests validate that the chosen pair is currently available; some listed assets may not be swappable with every other asset.
-- A Venmo route creates a ChangeNOW tunnel and displays its pay-in address for manual sending. Venmo asset/network support varies by region and account.
+- A Venmo → Trust Wallet route creates a ChangeNOW tunnel, then displays its pay-in address for the user to send from Venmo manually. ChangeNOW pays the swap output to the saved Trust Wallet address. Venmo asset/network support varies by region and account.
 - Assets that require a destination memo/tag prompt for it, and deposit memos returned by ChangeNOW are displayed with the deposit address.
-- A Trust Wallet route checks the configured native EVM coin/network pair, creates the tunnel, then asks the connected wallet to send that coin to the returned pay-in address. The user must approve the separate transaction in their wallet. This starter intentionally does not submit ERC-20 token transfers.
-- The destination must be a supported cryptocurrency address. A PayPal email/account is not itself a crypto deposit address; use a valid external crypto address only if PayPal supports that asset and network for your account. ChangeNOW availability and payout support must be verified before relying on a route.
+- A Trust Wallet → Venmo route creates the tunnel, then asks the connected wallet to send the selected native EVM coin to the returned pay-in address. The user must approve the separate transaction in their wallet. ChangeNOW sends the output to the saved Venmo crypto receiving address. This starter intentionally does not submit ERC-20 token transfers.
+- Asset menus are searchable, show popular assets first, and distinguish same-ticker assets on different networks. Send and receive lists use ChangeNOW's direction-specific catalog flags; a quote still verifies that the selected pair and amount are currently available.
+- Destinations must be supported cryptocurrency receiving addresses, not account emails. Confirm that the receiving app supports the selected asset and network before relying on a route.
 - The app checks ChangeNOW's minimum and estimated receive amount before confirmation. The server binds tunnel creation to the authenticated user's exact route and destination quote, expires quotes after one minute, and consumes each quote once. Standard-flow estimates are still indicative, not a guaranteed quote. Confirm the API key's endpoint access and current v2 response schema before handling real funds.
 
 ## Static hosting
