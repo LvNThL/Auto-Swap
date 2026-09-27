@@ -172,11 +172,6 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .history-main strong span { color: var(--muted); font-weight: 400; }
 .history-main small { overflow-wrap: anywhere; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .history-main code { color: var(--code-ink); font-family: 'IBM Plex Mono', monospace; font-size: 9px; }
-.history-deposit { display: grid; justify-items: start; gap: 8px; margin-top: 5px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--input-bg); }
-.history-deposit > span { color: var(--muted); font-size: 9px; }
-.history-deposit code { overflow-wrap: anywhere; color: var(--code-ink); font-family: 'IBM Plex Mono', monospace; font-size: 10px; }
-.history-deposit .button { justify-self: start; }
-.history-status-delayed { color: var(--pending-ink) !important; }
 .history-blockchain-links { display: flex; flex-wrap: wrap; gap: 12px; }
 .history-blockchain-link { color: var(--text-button-ink); font-size: 9px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .history-archives { margin-top: 21px; padding-top: 16px; border-top: 1px solid var(--line); }

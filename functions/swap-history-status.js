@@ -15,4 +15,8 @@ function pendingHistoryStatus(status) {
   return typeof status === 'string' && status.toLowerCase() === 'expired' ? 'cancelled' : status
 }
 
-module.exports = { depositReceived, pendingHistoryStatus }
+function isWaitingForDeposit(status) {
+  return typeof status === 'string' && status.toLowerCase() === 'waiting'
+}
+
+module.exports = { depositReceived, pendingHistoryStatus, isWaitingForDeposit }

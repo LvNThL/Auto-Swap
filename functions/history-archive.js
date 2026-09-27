@@ -10,6 +10,7 @@ const CSV_COLUMNS = [
   ['Received Network', 'toNetwork'],
   ['Deposit Transaction Hash', 'payinHash'],
   ['Payout Transaction Hash', 'payoutHash'],
+  ['Closure Reason', 'cancellationReason'],
 ]
 
 function timestampMillis(value) {
@@ -31,6 +32,7 @@ function serializeSwapHistoryRecord(id, record) {
     payinExplorerUrl: record.payinExplorerUrl ?? null,
     payoutExplorerUrl: record.payoutExplorerUrl ?? null,
     status: record.status ?? 'unknown',
+    cancellationReason: record.cancellationReason ?? null,
     createdAt: timestampMillis(record.createdAt),
     updatedAt: timestampMillis(record.updatedAt),
   }

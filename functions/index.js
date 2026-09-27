@@ -6,7 +6,7 @@ const { getFirestore, Timestamp } = require('firebase-admin/firestore')
 const { getStorage } = require('firebase-admin/storage')
 const { quoteMatchesExchange, quoteMatchesPreset, quoteExpired } = require('./quote-validation')
 const { normalizeCurrencyCatalog } = require('./currency-catalog')
-const { depositReceived, pendingHistoryStatus } = require('./swap-history-status')
+const { depositReceived, pendingHistoryStatus, isWaitingForDeposit } = require('./swap-history-status')
 const {
   historyArchiveMonth,
   historyArchivePath,
@@ -79,6 +79,36 @@ function getArchiveBucket() {
 
 function serializeSwapHistory(snapshot) {
   return serializeSwapHistoryRecord(snapshot.id, snapshot.data())
+}
+
+async function savePendingSwapToHistory({ uid, pendingDoc, exchangeId, transactionDetails, status, providerToAmount, cancellationReason }) {
+  const historyRef = swapHistoryCollection(uid).doc(pendingDoc.id)
+  await database.runTransaction(async (transaction) => {
+    const currentPending = await transaction.get(pendingDoc.ref)
+    if (!currentPending.exists || currentPending.get('trackingStatus') !== 'pending') return
+    const pendingRecord = currentPending.data()
+    const now = Timestamp.fromMillis(Date.now())
+    transaction.set(historyRef, {
+      exchangeId,
+      fromCurrency: pendingRecord.fromCurrency,
+      fromNetwork: pendingRecord.fromNetwork,
+      fromAmount: pendingRecord.fromAmount,
+      toCurrency: pendingRecord.toCurrency,
+      toNetwork: pendingRecord.toNetwork,
+      toAmount: providerToAmount == null ? pendingRecord.estimatedAmount ?? null : String(providerToAmount),
+      ...transactionDetails,
+      status,
+      ...(cancellationReason ? { cancellationReason } : {}),
+      createdAt: pendingRecord.tunnelOpenedAt ?? pendingRecord.createdAt ?? now,
+      updatedAt: now,
+    })
+    transaction.delete(pendingDoc.ref)
+  })
+
+  const historySnapshot = await historyRef.get()
+  return historySnapshot.exists
+    ? { ...serializeSwapHistory(historySnapshot), historyCreated: true }
+    : { exchangeId, status, pending: true }
 }
 
 function getUserRecordUsageRef(uid) {
@@ -781,60 +811,26 @@ exports.refreshSwapStatus = onCall(
     if (pendingDoc) {
       const status = result.status.toLowerCase()
       if (depositReceived(status)) {
-        const historyRef = swapHistoryCollection(request.auth.uid).doc(pendingDoc.id)
-        await database.runTransaction(async (transaction) => {
-          const pendingSnapshot = await transaction.get(pendingDoc.ref)
-          if (!pendingSnapshot.exists || pendingSnapshot.get('trackingStatus') !== 'pending') return
-          const pendingRecord = pendingSnapshot.data()
-          transaction.set(historyRef, {
-            exchangeId,
-            fromCurrency: pendingRecord.fromCurrency,
-            fromNetwork: pendingRecord.fromNetwork,
-            fromAmount: pendingRecord.fromAmount,
-            toCurrency: pendingRecord.toCurrency,
-            toNetwork: pendingRecord.toNetwork,
-            toAmount: result.toAmount == null ? pendingRecord.estimatedAmount ?? null : String(result.toAmount),
-            ...transactionDetails,
-            status: result.status,
-            createdAt: pendingRecord.tunnelOpenedAt ?? pendingRecord.createdAt ?? Timestamp.fromMillis(Date.now()),
-            updatedAt: Timestamp.fromMillis(Date.now()),
-          })
-          transaction.delete(pendingDoc.ref)
+        return savePendingSwapToHistory({
+          uid: request.auth.uid,
+          pendingDoc,
+          exchangeId,
+          transactionDetails,
+          status: result.status,
+          providerToAmount: result.toAmount,
         })
-
-        const promotedSnapshot = await historyRef.get()
-        return promotedSnapshot.exists
-          ? { ...serializeSwapHistory(promotedSnapshot), historyCreated: true }
-          : { id: pendingDoc.id, exchangeId, status: result.status, pending: true }
       }
 
       if (status === 'expired') {
-        const historyRef = swapHistoryCollection(request.auth.uid).doc(pendingDoc.id)
-        await database.runTransaction(async (transaction) => {
-          const currentPending = await transaction.get(pendingDoc.ref)
-          if (!currentPending.exists || currentPending.get('trackingStatus') !== 'pending') return
-          const pendingRecord = currentPending.data()
-          const now = Timestamp.fromMillis(Date.now())
-          transaction.set(historyRef, {
-            exchangeId,
-            fromCurrency: pendingRecord.fromCurrency,
-            fromNetwork: pendingRecord.fromNetwork,
-            fromAmount: pendingRecord.fromAmount,
-            toCurrency: pendingRecord.toCurrency,
-            toNetwork: pendingRecord.toNetwork,
-            toAmount: pendingRecord.estimatedAmount ?? null,
-            ...transactionDetails,
-            status: pendingHistoryStatus(result.status),
-            createdAt: pendingRecord.tunnelOpenedAt ?? pendingRecord.createdAt ?? now,
-            updatedAt: now,
-          })
-          transaction.delete(pendingDoc.ref)
+        return savePendingSwapToHistory({
+          uid: request.auth.uid,
+          pendingDoc,
+          exchangeId,
+          transactionDetails,
+          status: pendingHistoryStatus(result.status),
+          providerToAmount: result.toAmount,
+          cancellationReason: 'provider-expired',
         })
-
-        const cancelledSnapshot = await historyRef.get()
-        return cancelledSnapshot.exists
-          ? { ...serializeSwapHistory(cancelledSnapshot), historyCreated: true }
-          : { exchangeId, status: 'cancelled', pending: true }
       }
 
       await pendingDoc.ref.update({ ...transactionDetails, status: result.status, updatedAt: Timestamp.fromMillis(Date.now()) })
@@ -850,6 +846,76 @@ exports.refreshSwapStatus = onCall(
 
     const updatedSnapshot = await historyDoc.ref.get()
     return serializeSwapHistory(updatedSnapshot)
+  },
+)
+
+exports.cancelPendingSwap = onCall(
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  async (request) => {
+    assertVerifiedUser(request)
+    const exchangeId = requiredString(request.data?.exchangeId, 'exchangeId', 128)
+    const uid = request.auth.uid
+    const existingHistorySnapshot = await swapHistoryCollection(uid)
+      .where('exchangeId', '==', exchangeId)
+      .limit(1)
+      .get()
+    const existingHistory = existingHistorySnapshot.docs[0] ?? null
+    if (existingHistory) return serializeSwapHistory(existingHistory)
+
+    const pendingSnapshot = await database.collection('users').doc(uid)
+      .collection('swapQuotes')
+      .where('exchangeId', '==', exchangeId)
+      .limit(1)
+      .get()
+    const pendingDoc = pendingSnapshot.docs[0] ?? null
+    if (!pendingDoc || pendingDoc.get('trackingStatus') !== 'pending') {
+      throw new HttpsError('not-found', 'This waiting exchange is no longer available to close.')
+    }
+
+    await enforceRequestCooldown(uid, `cancel-${exchangeId}`, 5000)
+    const result = await callChangeNow(`/by-id?id=${encodeURIComponent(exchangeId)}`)
+    if (typeof result.status !== 'string' || !result.status.trim()) {
+      throw new HttpsError('unavailable', 'ChangeNOW did not return a transaction status.')
+    }
+
+    const transactionDetails = extractTransactionHistoryDetails(result, {
+      fromNetwork: pendingDoc.get('fromNetwork'),
+      toNetwork: pendingDoc.get('toNetwork'),
+    })
+    const status = result.status.toLowerCase()
+    if (depositReceived(status)) {
+      return savePendingSwapToHistory({
+        uid,
+        pendingDoc,
+        exchangeId,
+        transactionDetails,
+        status: result.status,
+        providerToAmount: result.toAmount,
+      })
+    }
+    if (status === 'expired') {
+      return savePendingSwapToHistory({
+        uid,
+        pendingDoc,
+        exchangeId,
+        transactionDetails,
+        status: pendingHistoryStatus(result.status),
+        providerToAmount: result.toAmount,
+        cancellationReason: 'provider-expired',
+      })
+    }
+    if (!isWaitingForDeposit(status)) {
+      throw new HttpsError('failed-precondition', 'ChangeNOW no longer reports this exchange as waiting for a deposit, so it cannot be manually closed.')
+    }
+
+    return savePendingSwapToHistory({
+      uid,
+      pendingDoc,
+      exchangeId,
+      transactionDetails,
+      status: 'cancelled',
+      cancellationReason: 'user-requested',
+    })
   },
 )
 

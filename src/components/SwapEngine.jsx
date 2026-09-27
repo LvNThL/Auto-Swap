@@ -118,9 +118,12 @@ function getErrorMessage(error) {
   return error?.message || 'The route could not be completed. Check the route and try again.'
 }
 
-function formatSwapStatus(status) {
-  if (String(status).toLowerCase() === 'waiting') return 'Waiting for deposit'
-  if (String(status).toLowerCase() === 'finished') return 'Completed'
+function formatSwapStatus(status, cancellationReason) {
+  const normalizedStatus = String(status).toLowerCase()
+  if (normalizedStatus === 'cancelled' && cancellationReason === 'user-requested') return 'Closed in AutoSwap'
+  if (normalizedStatus === 'cancelled' && cancellationReason === 'provider-expired') return 'Expired'
+  if (normalizedStatus === 'waiting') return 'Waiting for deposit'
+  if (normalizedStatus === 'finished') return 'Completed'
   return String(status || 'unknown').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
@@ -134,11 +137,9 @@ function formatTunnelTimeRemaining(expiresAt, now) {
 const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
 const depositReceivedStatuses = new Set(['confirming', 'exchanging', 'sending', 'finished', 'failed', 'refunded'])
 
-function SwapHistoryItem({ swap, statusCheck, copyToast, copyToClipboard }) {
+function SwapHistoryItem({ swap, onCancel, cancellingExchangeId }) {
   const status = String(swap.status || 'unknown').toLowerCase()
   const isTerminal = terminalSwapStatuses.has(status)
-  const addressTarget = `history-address-${swap.exchangeId}`
-  const memoTarget = `history-memo-${swap.exchangeId}`
 
   return (
     <article className="history-item">
@@ -147,19 +148,6 @@ function SwapHistoryItem({ swap, statusCheck, copyToast, copyToClipboard }) {
         <small>{swap.fromAmount} {swap.fromCurrency?.toUpperCase()} ({swap.fromNetwork?.toUpperCase()}) → {swap.toCurrency?.toUpperCase()} ({swap.toNetwork?.toUpperCase()})</small>
         <small>{swap.createdAt ? new Date(swap.createdAt).toLocaleString() : 'Date unavailable'}{swap.toAmount ? ` · ${status === 'finished' ? 'Received' : 'Est. receive'} ${swap.toAmount} ${swap.toCurrency?.toUpperCase()}` : ''}</small>
         {swap.exchangeId && <small>Exchange ID: <code>{swap.exchangeId}</code></small>}
-        {statusCheck?.error && <small className="history-status-delayed" role="status">Status check delayed{statusCheck.checkedAt ? ` · Last successful check ${new Date(statusCheck.checkedAt).toLocaleTimeString()}` : ''}. We'll retry automatically; this doesn't change the recorded status.</small>}
-        {swap.pending && swap.payinAddress && (
-          <div className="history-deposit">
-            <span>Deposit address for this tunnel only</span>
-            <code>{swap.payinAddress}</code>
-            <button aria-live="polite" className={`button button-quiet ${copyToast?.target === addressTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(swap.payinAddress, 'Deposit address', addressTarget)} type="button">{copyToast?.target === addressTarget ? '✓ Copied' : 'Copy address'}</button>
-            {swap.payinExtraId && <>
-              <span>Required memo or tag</span>
-              <code>{swap.payinExtraId}</code>
-              <button aria-live="polite" className={`button button-quiet ${copyToast?.target === memoTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(swap.payinExtraId, 'Memo or tag', memoTarget)} type="button">{copyToast?.target === memoTarget ? '✓ Copied' : 'Copy memo or tag'}</button>
-            </>}
-          </div>
-        )}
         {(swap.payinExplorerUrl || swap.payoutExplorerUrl) && (
           <div className="history-blockchain-links">
             {swap.payinExplorerUrl && <a className="history-blockchain-link" href={swap.payinExplorerUrl} rel="noopener noreferrer" target="_blank">View deposit on blockchain</a>}
@@ -168,7 +156,12 @@ function SwapHistoryItem({ swap, statusCheck, copyToast, copyToClipboard }) {
         )}
       </div>
       <div className="history-status-controls">
-        <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status)}</span>
+        <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status, swap.cancellationReason)}</span>
+        {swap.pending && status === 'waiting' && (
+          <button className="button button-quiet" disabled={cancellingExchangeId !== ''} onClick={() => onCancel(swap)} title="Closes tracking in AutoSwap only; this does not cancel the ChangeNOW exchange." type="button">
+            {cancellingExchangeId === swap.exchangeId ? 'Checking…' : 'Cancel'}
+          </button>
+        )}
       </div>
     </article>
   )
@@ -208,7 +201,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [archiveDownloadBusy, setArchiveDownloadBusy] = useState('')
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
-  const [statusCheckByExchange, setStatusCheckByExchange] = useState({})
+  const [cancellingExchangeId, setCancellingExchangeId] = useState('')
   const [copyToast, setCopyToast] = useState(null)
   const [clockNow, setClockNow] = useState(() => Date.now())
 
@@ -239,7 +232,10 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       }
       : null
   const visibleSwapHistory = [
-    ...swapHistory.filter((swap) => depositReceivedStatuses.has(String(swap.status || '').toLowerCase())),
+    ...swapHistory.filter((swap) => {
+      const status = String(swap.status || '').toLowerCase()
+      return depositReceivedStatuses.has(status) || terminalSwapStatuses.has(status)
+    }),
     ...pendingSwaps.map((swap) => ({
       ...swap,
       id: swap.id ?? swap.exchangeId,
@@ -277,6 +273,35 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     const { data } = await getHistory({})
     setSwapHistory(data.swaps ?? [])
     setPendingSwaps(data.pendingSwaps ?? [])
+  }
+
+  async function closeWaitingSwap(swap) {
+    const confirmed = window.confirm(
+      `Cancel tracking for ${swap.fromAmount} ${swap.fromCurrency?.toUpperCase()}?\n\nOnly continue if you did not send funds. AutoSwap checks with ChangeNOW first, then closes this log locally. It does not cancel the ChangeNOW exchange or deactivate its deposit address.`,
+    )
+    if (!confirmed) return
+
+    setHistoryError('')
+    setNotice('')
+    setCancellingExchangeId(swap.exchangeId)
+    try {
+      const cancelPendingSwap = httpsCallable(functions, 'cancelPendingSwap')
+      const { data } = await cancelPendingSwap({ exchangeId: swap.exchangeId })
+      if (data.cancellationReason === 'user-requested') {
+        setNotice('Tracking closed in AutoSwap. The ChangeNOW exchange and deposit address remain unchanged.')
+      } else if (depositReceivedStatuses.has(String(data.status || '').toLowerCase())) {
+        setNotice('ChangeNOW detected deposit activity; the swap remains in your history.')
+      }
+      if (data.historyCreated) {
+        setTunnel((current) => current?.id === swap.exchangeId ? null : current)
+        setTunnelPreset((current) => tunnel?.id === swap.exchangeId ? null : current)
+      }
+      await loadSwapHistory()
+    } catch (cancelError) {
+      setHistoryError(getErrorMessage(cancelError))
+    } finally {
+      setCancellingExchangeId('')
+    }
   }
 
   async function loadHistoryArchives() {
@@ -364,25 +389,14 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         const pending = [...outstandingHistory, ...waitingForDeposit.filter((swap) => swap.exchangeId)]
         const batch = pending.slice(pollOffset, pollOffset + 5)
         pollOffset = pending.length ? (pollOffset + batch.length) % pending.length : 0
-        const statusChecks = await Promise.all(batch.map(async (swap) => {
+        const refreshed = await Promise.all(batch.map(async (swap) => {
           try {
-            return { exchangeId: swap.exchangeId, data: (await refreshStatus({ exchangeId: swap.exchangeId })).data }
+            return (await refreshStatus({ exchangeId: swap.exchangeId })).data
           } catch {
-            return { exchangeId: swap.exchangeId, error: true }
+            return null
           }
         }))
-        const refreshed = statusChecks.flatMap((check) => check.data ? [check.data] : [])
         if (active) {
-          const checkedAt = Date.now()
-          setStatusCheckByExchange((current) => {
-            const updated = { ...current }
-            for (const check of statusChecks) {
-              updated[check.exchangeId] = check.error
-                ? { ...updated[check.exchangeId], error: true }
-                : { error: false, checkedAt }
-            }
-            return updated
-          })
           const updatedHistory = new Map(refreshed.filter((swap) => swap && !swap.pending && !swap.discarded)
             .map((swap) => [swap.exchangeId, swap]))
           setSwapHistory((current) => {
@@ -401,7 +415,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
             .map((swap) => ({ ...swap, ...updatedPending.get(swap.exchangeId) })))
         }
       } catch {
-        if (active) setHistoryError("We couldn't refresh exchange activity just now. Existing swap statuses are unchanged; we'll retry automatically.")
       } finally {
         polling = false
       }
@@ -1004,7 +1017,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               <>
                 <div className="history-list">
                   {recentSwapHistory.map((swap) => (
-                    <SwapHistoryItem key={swap.id} copyToast={copyToast} copyToClipboard={copyToClipboard} statusCheck={statusCheckByExchange[swap.exchangeId]} swap={swap} />
+                    <SwapHistoryItem key={swap.id} cancellingExchangeId={cancellingExchangeId} onCancel={closeWaitingSwap} swap={swap} />
                   ))}
                 </div>
                 {olderWaitingSwaps.length > 0 && (
@@ -1012,7 +1025,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     <summary>Older waiting tunnels ({olderWaitingSwaps.length})</summary>
                     <div className="history-list">
                       {olderWaitingSwaps.map((swap) => (
-                        <SwapHistoryItem key={swap.id} copyToast={copyToast} copyToClipboard={copyToClipboard} statusCheck={statusCheckByExchange[swap.exchangeId]} swap={swap} />
+                        <SwapHistoryItem key={swap.id} cancellingExchangeId={cancellingExchangeId} onCancel={closeWaitingSwap} swap={swap} />
                       ))}
                     </div>
                   </details>

@@ -37,6 +37,7 @@ test('serializes tax history without dropping timestamps or explorer data', () =
     payinExplorerUrl: 'https://example.com/deposit-hash',
     payoutExplorerUrl: null,
     status: 'finished',
+    cancellationReason: null,
     createdAt: Date.UTC(2026, 7, 12),
     updatedAt: null,
   })
@@ -79,10 +80,11 @@ test('creates spreadsheet-safe CSV with tax-relevant transaction fields', () => 
     toNetwork: 'eth',
     payinHash: 'deposit-hash',
     payoutHash: 'payout-hash',
+    cancellationReason: 'user-requested',
   }])
 
   assert.match(csv, /^"Date","Status","Exchange ID"/)
   assert.match(csv, /"'=?IMPORTXML\(""unsafe""\)"/)
   assert.match(csv, /"2026-01-02T00:00:00\.000Z"/)
-  assert.match(csv, /"deposit-hash","payout-hash"$/)
+  assert.match(csv, /"deposit-hash","payout-hash","user-requested"$/)
 })
