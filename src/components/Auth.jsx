@@ -1,16 +1,21 @@
 import { useState } from 'react'
+import ThemeSelector from './ThemeSelector.jsx'
 import {
+  browserLocalPersistence,
+  browserSessionPersistence,
   createUserWithEmailAndPassword,
   sendEmailVerification,
+  setPersistence,
   signOut,
   signInWithEmailAndPassword,
 } from 'firebase/auth'
 import { auth } from '../firebase.js'
 
-export default function Auth({ verificationUser }) {
+export default function Auth({ verificationUser, themePreference, onThemeChange }) {
   const [mode, setMode] = useState('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [rememberMe, setRememberMe] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
 
@@ -20,6 +25,7 @@ export default function Auth({ verificationUser }) {
     setBusy(true)
 
     try {
+      await setPersistence(auth, mode === 'login' && !rememberMe ? browserSessionPersistence : browserLocalPersistence)
       if (mode === 'register') {
         const credential = await createUserWithEmailAndPassword(auth, email.trim(), password)
         await sendEmailVerification(credential.user)
@@ -69,7 +75,8 @@ export default function Auth({ verificationUser }) {
   if (verificationUser) {
     return (
       <main className="auth-shell">
-        <div className="auth-brand"><span className="brand-mark" aria-hidden="true">↔</span><span>AutoSwap <i>Route Desk</i></span></div>
+        <ThemeSelector className="auth-theme-selector" onChange={onThemeChange} value={themePreference} />
+        <div className="auth-brand"><span className="brand-mark" aria-hidden="true">↔</span><span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span></div>
         <section className="auth-panel">
           <p className="eyebrow">VERIFY YOUR EMAIL</p>
           <h1>One more step.</h1>
@@ -87,9 +94,10 @@ export default function Auth({ verificationUser }) {
 
   return (
     <main className="auth-shell">
+      <ThemeSelector className="auth-theme-selector" onChange={onThemeChange} value={themePreference} />
       <div className="auth-brand">
         <span className="brand-mark" aria-hidden="true">↔</span>
-        <span>AutoSwap <i>Route Desk</i></span>
+        <span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span>
       </div>
       <section className="auth-panel">
         <p className="eyebrow">PRIVATE WORKSPACE</p>
@@ -111,6 +119,12 @@ export default function Auth({ verificationUser }) {
               required
             />
           </label>
+          {mode === 'login' && (
+            <label className="remember-option">
+              <input checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} type="checkbox" />
+              <span>Remember me on this device</span>
+            </label>
+          )}
           {message && <p className="form-message" role="status">{message}</p>}
           <button className="button button-primary" disabled={busy} type="submit">
             {busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}

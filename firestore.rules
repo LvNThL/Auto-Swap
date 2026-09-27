@@ -10,5 +10,10 @@ service cloud.firestore {
       allow read, create, update, delete: if request.auth != null
         && request.auth.uid == userId;
     }
+
+    match /users/{userId}/swapHistory/{swapId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if false;
+    }
   }
 }

@@ -39,6 +39,29 @@ async function enforceRequestCooldown(uid, action, cooldownMs) {
   })
 }
 
+function swapHistoryCollection(uid) {
+  return database.collection('users').doc(uid).collection('swapHistory')
+}
+
+function serializeSwapHistory(snapshot) {
+  const record = snapshot.data()
+  return {
+    id: snapshot.id,
+    exchangeId: record.exchangeId ?? null,
+    fromCurrency: record.fromCurrency,
+    fromNetwork: record.fromNetwork,
+    fromAmount: record.fromAmount,
+    toCurrency: record.toCurrency,
+    toNetwork: record.toNetwork,
+    toAmount: record.toAmount ?? null,
+    status: record.status ?? 'unknown',
+    createdAt: record.createdAt?.toMillis() ?? null,
+    updatedAt: record.updatedAt?.toMillis() ?? null,
+  }
+}
+
+const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired'])
+
 async function consumeQuote(uid, quoteId, exchange) {
   const quoteRef = database.collection('users').doc(uid).collection('swapQuotes').doc(quoteId)
   const rateLimitRef = database.collection('_swapRateLimits').doc(`${uid}-create`)
@@ -258,8 +281,9 @@ exports.getSwapQuote = onCall(
 
     const estimate = await callChangeNow(`/estimated-amount?${buildQuery(exchange, true)}`)
     const estimatedAmount = estimate.estimatedAmount ?? estimate.toAmount
-    if (typeof estimatedAmount !== 'string' && typeof estimatedAmount !== 'number') {
-      throw new HttpsError('unavailable', 'ChangeNOW returned an invalid estimate response.')
+    if ((typeof estimatedAmount !== 'string' && typeof estimatedAmount !== 'number') ||
+      !Number.isFinite(Number(estimatedAmount)) || Number(estimatedAmount) <= 0) {
+      throw new HttpsError('failed-precondition', 'ChangeNOW did not return a usable live estimate for this exact pair. No deposit address can be created; do not send funds.')
     }
 
     const quotedAt = Date.now()
@@ -318,14 +342,85 @@ exports.createSwapTunnel = onCall(
       throw new HttpsError('unavailable', 'ChangeNOW did not return a deposit address.')
     }
 
+    const exchangeId = result.id ?? result.exchangeId ?? null
+    let historySaved = false
+    try {
+      await swapHistoryCollection(request.auth.uid).add({
+        exchangeId: typeof exchangeId === 'string' ? exchangeId : null,
+        fromCurrency: exchange.fromCurrency,
+        fromNetwork: exchange.fromNetwork,
+        fromAmount: exchange.fromAmount,
+        toCurrency: exchange.toCurrency,
+        toNetwork: exchange.toNetwork,
+        toAmount: result.toAmount == null ? null : String(result.toAmount),
+        status: typeof result.status === 'string' ? result.status : 'waiting',
+        createdAt: Timestamp.fromMillis(Date.now()),
+        updatedAt: Timestamp.fromMillis(Date.now()),
+      })
+      historySaved = true
+    } catch (historyError) {
+      console.error('Could not save swap history:', historyError.message)
+    }
+
     return {
-      id: result.id ?? result.exchangeId ?? null,
+      id: exchangeId,
       payinAddress,
       payinExtraId: result.payinExtraId ?? null,
       payoutAddress: result.payoutAddress ?? null,
       fromAmount: String(result.fromAmount ?? exchange.fromAmount),
       toAmount: result.toAmount == null ? null : String(result.toAmount),
       status: result.status ?? 'waiting',
+      historySaved,
     }
+  },
+)
+
+exports.getSwapHistory = onCall(
+  { region: 'us-central1', maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  async (request) => {
+    assertVerifiedUser(request)
+    const snapshot = await swapHistoryCollection(request.auth.uid)
+      .orderBy('createdAt', 'desc')
+      .limit(50)
+      .get()
+
+    return { swaps: snapshot.docs.map(serializeSwapHistory) }
+  },
+)
+
+exports.refreshSwapStatus = onCall(
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  async (request) => {
+    assertVerifiedUser(request)
+    const exchangeId = requiredString(request.data?.exchangeId, 'exchangeId', 128)
+    const historySnapshot = await swapHistoryCollection(request.auth.uid)
+      .where('exchangeId', '==', exchangeId)
+      .limit(1)
+      .get()
+
+    if (historySnapshot.empty) {
+      throw new HttpsError('not-found', 'This exchange is not in your swap history.')
+    }
+
+    const historyDoc = historySnapshot.docs[0]
+    const savedRecord = historyDoc.data()
+    if (terminalSwapStatuses.has(String(savedRecord.status).toLowerCase())) {
+      return serializeSwapHistory(historyDoc)
+    }
+
+    await enforceRequestCooldown(request.auth.uid, `status-${exchangeId}`, 5000)
+    const result = await callChangeNow(`/by-id?id=${encodeURIComponent(exchangeId)}`)
+    if (typeof result.status !== 'string' || !result.status.trim()) {
+      throw new HttpsError('unavailable', 'ChangeNOW did not return a transaction status.')
+    }
+
+    await historyDoc.ref.update({
+      status: result.status,
+      ...(result.toAmount == null ? {} : { toAmount: String(result.toAmount) }),
+      updatedAt: Timestamp.fromMillis(Date.now()),
+    })
+
+    const updatedSnapshot = await historyDoc.ref.get()
+    return serializeSwapHistory(updatedSnapshot)
   },
 )

@@ -3,6 +3,7 @@ import { httpsCallable } from 'firebase/functions'
 import { signOut } from 'firebase/auth'
 import Select from 'react-select'
 import { auth, functions, isFirebaseConfigured } from '../firebase.js'
+import ThemeSelector from './ThemeSelector.jsx'
 import {
   createAddressBookEntry,
   deleteAddressBookEntry,
@@ -38,21 +39,23 @@ const assetSelectStyles = {
   control: (base, state) => ({
     ...base,
     minHeight: 42,
-    borderColor: state.isFocused ? '#739a32' : '#dbe1d8',
+    borderColor: state.isFocused ? '#739a32' : 'var(--line)',
+    backgroundColor: 'var(--paper)',
+    color: 'var(--ink)',
     borderRadius: 5,
     boxShadow: 'none',
     fontSize: 12,
-    ':hover': { borderColor: '#a6b49e' },
+    ':hover': { borderColor: 'var(--muted)' },
   }),
   menuPortal: (base) => ({ ...base, zIndex: 30 }),
-  menu: (base) => ({ ...base, zIndex: 30, overflow: 'hidden', border: '1px solid #dbe1d8', borderRadius: 6 }),
+  menu: (base) => ({ ...base, zIndex: 30, overflow: 'hidden', border: '1px solid var(--line)', borderRadius: 6, backgroundColor: 'var(--paper)' }),
   menuList: (base) => ({ ...base, maxHeight: 260, overflowY: 'auto', scrollbarWidth: 'thin' }),
-  groupHeading: (base) => ({ ...base, color: '#718078', fontFamily: 'IBM Plex Mono, monospace', fontSize: 9, textTransform: 'uppercase' }),
+  groupHeading: (base) => ({ ...base, color: 'var(--muted)', fontFamily: 'IBM Plex Mono, monospace', fontSize: 9, textTransform: 'uppercase' }),
   option: (base, state) => ({
     ...base,
     padding: '8px 11px',
-    backgroundColor: state.isSelected ? '#e9f4d9' : state.isFocused ? '#f3f7ed' : '#fff',
-    color: '#202923',
+    backgroundColor: state.isSelected ? 'var(--select-selected)' : state.isFocused ? 'var(--select-focused)' : 'var(--paper)',
+    color: 'var(--ink)',
     cursor: 'pointer',
   }),
 }
@@ -104,7 +107,14 @@ function getErrorMessage(error) {
   return error?.message || 'The route could not be completed. Check the route and try again.'
 }
 
-export default function SwapEngine({ user }) {
+function formatSwapStatus(status) {
+  if (String(status).toLowerCase() === 'finished') return 'Completed'
+  return String(status || 'unknown').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired'])
+
+export default function SwapEngine({ user, themePreference, onThemeChange }) {
   const [presets, setPresets] = useState([])
   const [currencies, setCurrencies] = useState([])
   const [currenciesLoading, setCurrenciesLoading] = useState(true)
@@ -130,6 +140,11 @@ export default function SwapEngine({ user }) {
   const [quote, setQuote] = useState(null)
   const [tunnel, setTunnel] = useState(null)
   const [tunnelPreset, setTunnelPreset] = useState(null)
+  const [swapHistory, setSwapHistory] = useState([])
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyError, setHistoryError] = useState('')
+  const [refreshingSwapId, setRefreshingSwapId] = useState('')
+  const [copyToast, setCopyToast] = useState(null)
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
   const fromCurrencies = currencies.filter((currency) => currency.canSell)
@@ -150,6 +165,95 @@ export default function SwapEngine({ user }) {
     entry.purpose === 'destination' && entry.ticker === selectedToCurrency?.ticker && entry.network === selectedToCurrency?.network)
   const refundAddressEntries = addressBookEntries.filter((entry) =>
     entry.purpose === 'refund' && entry.ticker === selectedFromCurrency?.ticker && entry.network === selectedFromCurrency?.network)
+
+  async function loadSwapHistory() {
+    const getHistory = httpsCallable(functions, 'getSwapHistory')
+    const { data } = await getHistory({})
+    setSwapHistory(data.swaps ?? [])
+  }
+
+  async function copyToClipboard(value, label) {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopyToast({ message: `${label} copied` })
+    } catch {
+      setCopyToast({ message: 'Clipboard access is unavailable' })
+    }
+  }
+
+  async function refreshSwapStatus(exchangeId) {
+    setRefreshingSwapId(exchangeId)
+    setHistoryError('')
+    try {
+      const refresh = httpsCallable(functions, 'refreshSwapStatus')
+      const { data } = await refresh({ exchangeId })
+      setSwapHistory((current) => current.map((swap) => swap.exchangeId === exchangeId ? data : swap))
+    } catch (statusError) {
+      setHistoryError(`Status could not be refreshed. The saved swap is still in your history. ${getErrorMessage(statusError)}`)
+    } finally {
+      setRefreshingSwapId('')
+    }
+  }
+
+  useEffect(() => {
+    if (!copyToast) return undefined
+    const timeout = window.setTimeout(() => setCopyToast(null), 2200)
+    return () => window.clearTimeout(timeout)
+  }, [copyToast])
+
+  useEffect(() => {
+    let active = true
+    let polling = false
+    let pollOffset = 0
+    const getHistory = httpsCallable(functions, 'getSwapHistory')
+    const refreshStatus = httpsCallable(functions, 'refreshSwapStatus')
+
+    async function loadHistory() {
+      try {
+        const { data } = await getHistory({})
+        if (active) setSwapHistory(data.swaps ?? [])
+      } catch {
+        if (active) setHistoryError('Swap history could not be loaded.')
+      } finally {
+        if (active) setHistoryLoading(false)
+      }
+    }
+
+    async function pollHistory() {
+      if (polling) return
+      polling = true
+      try {
+        const { data } = await getHistory({})
+        const swaps = data.swaps ?? []
+        if (!active) return
+        setSwapHistory(swaps)
+        const pending = swaps.filter((swap) => swap.exchangeId && !terminalSwapStatuses.has(String(swap.status).toLowerCase()))
+        const batch = pending.slice(pollOffset, pollOffset + 5)
+        pollOffset = pending.length ? (pollOffset + batch.length) % pending.length : 0
+        const refreshed = await Promise.all(batch.map(async (swap) => {
+          try {
+            return (await refreshStatus({ exchangeId: swap.exchangeId })).data
+          } catch {
+            return null
+          }
+        }))
+        if (active) {
+          const updated = new Map(refreshed.filter(Boolean).map((swap) => [swap.exchangeId, swap]))
+          setSwapHistory((current) => current.map((swap) => updated.get(swap.exchangeId) ?? swap))
+        }
+      } catch {
+      } finally {
+        polling = false
+      }
+    }
+
+    loadHistory()
+    const interval = window.setInterval(pollHistory, 15000)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+    }
+  }, [user.uid])
 
   async function refreshPresets() {
     const saved = await listPresets(user.uid)
@@ -440,7 +544,7 @@ export default function SwapEngine({ user }) {
     if (!selectedPreset) return
     setBusy(true)
     setError('')
-    setNotice('Checking the current minimum and estimate…')
+    setNotice('Checking current pair availability and a live estimate with ChangeNOW…')
     setQuote(null)
 
     try {
@@ -460,7 +564,7 @@ export default function SwapEngine({ user }) {
       setConfirming(true)
       setNotice('')
     } catch (quoteError) {
-      setError(getErrorMessage(quoteError))
+      setError(`ChangeNOW could not provide a usable live quote, so no deposit address was created. Do not send funds. ${getErrorMessage(quoteError)}`)
       setNotice('')
     } finally {
       setBusy(false)
@@ -488,11 +592,13 @@ export default function SwapEngine({ user }) {
       setTunnel(created)
       setTunnelPreset(selectedPreset)
       setQuote(null)
+      setHistoryError(created.historySaved ? '' : 'The tunnel was created, but it could not be saved to swap history.')
+      if (created.historySaved) loadSwapHistory().catch(() => setHistoryError('Tunnel created, but swap history could not be refreshed.'))
 
       const sourceWallet = getSourceWalletName(selectedPreset)
-      setNotice(`Tunnel ready. Send only ${selectedPreset.fromCurrency?.toUpperCase()} on ${selectedPreset.fromNetwork?.toUpperCase()} from ${sourceWallet} to this address.`)
+      setNotice(`Tunnel ready. Send only ${selectedPreset.fromCurrency?.toUpperCase()} on ${selectedPreset.fromNetwork?.toUpperCase()} from ${sourceWallet} to this address. This deposit address is for this exchange only.`)
     } catch (swapError) {
-      setError(getErrorMessage(swapError))
+      setError(`ChangeNOW did not create a usable deposit tunnel. No deposit address is available; do not send funds. ${getErrorMessage(swapError)}`)
       setNotice('')
       setQuote(null)
     } finally {
@@ -505,9 +611,10 @@ export default function SwapEngine({ user }) {
       <header className="topbar">
         <a className="app-brand" href="./" aria-label="AutoSwap Route Desk home">
           <span className="brand-mark" aria-hidden="true">↔</span>
-          <span>AutoSwap <i>Route Desk</i></span>
+          <span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span>
         </a>
         <div className="account-menu">
+          <ThemeSelector onChange={onThemeChange} value={themePreference} />
           <span className="account-email">{user.email}</span>
           <button className="button button-quiet" onClick={() => signOut(auth)} type="button">Sign out</button>
         </div>
@@ -684,12 +791,39 @@ export default function SwapEngine({ user }) {
             <section className="panel tunnel-panel">
               <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap tunnel ready</h2></div><span className="live-badge">LIVE</span></div>
               <p className="field-note">Send only {(tunnelPreset ?? selectedPreset)?.fromCurrency?.toUpperCase()} on {(tunnelPreset ?? selectedPreset)?.fromNetwork?.toUpperCase()} from {getSourceWalletName(tunnelPreset ?? selectedPreset)}. Sending another asset or network can permanently lose funds.</p>
-              <div className="deposit-address"><span>Deposit address</span><code>{tunnel.payinAddress}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinAddress)} type="button">Copy address</button></div>
-              {tunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{tunnel.payinExtraId}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinExtraId)} type="button">Copy memo or tag</button></div>}
+              <div className="notice notice-warning single-use-warning">Use this deposit address once for this exchange only. Never reuse it for another quote or swap. Send the exact asset on the exact network shown above.</div>
+              <div className="deposit-address"><span>Deposit address</span><code>{tunnel.payinAddress}</code><button className="button button-quiet" onClick={() => copyToClipboard(tunnel.payinAddress, 'Address')} type="button">Copy address</button></div>
+              {tunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{tunnel.payinExtraId}</code><button className="button button-quiet" onClick={() => copyToClipboard(tunnel.payinExtraId, 'Memo or tag')} type="button">Copy memo or tag</button></div>}
               {tunnel.transactionHash && <div className="transaction-hash"><span>Wallet transaction</span><code>{tunnel.transactionHash}</code></div>}
               {tunnel.id && <p className="field-note">Exchange ID: {tunnel.id}</p>}
             </section>
           )}
+
+          <section className="panel history-panel" aria-labelledby="swap-history-title">
+            <div className="panel-heading"><div><p className="eyebrow">EXCHANGE ACTIVITY</p><h2 id="swap-history-title">Swap history</h2></div><button className="button button-quiet" disabled={historyLoading} onClick={() => { setHistoryError(''); loadSwapHistory().catch(() => setHistoryError('Swap history could not be loaded.')) }} type="button">Refresh history</button></div>
+            {historyError && <div className="notice notice-error" role="alert">{historyError}</div>}
+            {historyLoading ? <p className="history-empty">Loading swap history…</p> : swapHistory.length === 0 ? <p className="history-empty">Your new swaps will appear here once a tunnel is created.</p> : (
+              <div className="history-list">
+                {swapHistory.map((swap) => {
+                  const status = String(swap.status || 'unknown').toLowerCase()
+                  const isTerminal = terminalSwapStatuses.has(status)
+                  return (
+                    <article className="history-item" key={swap.id}>
+                      <div className="history-main">
+                        <strong>{swap.fromCurrency?.toUpperCase()} <span>to</span> {swap.toCurrency?.toUpperCase()}</strong>
+                        <small>{swap.fromAmount} {swap.fromCurrency?.toUpperCase()} · {swap.fromNetwork?.toUpperCase()} to {swap.toNetwork?.toUpperCase()}</small>
+                        <small>{swap.createdAt ? new Date(swap.createdAt).toLocaleString() : 'Date unavailable'}{swap.toAmount ? ` · Est. receive ${swap.toAmount} ${swap.toCurrency?.toUpperCase()}` : ''}</small>
+                      </div>
+                      <div className="history-status-controls">
+                        <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status)}</span>
+                        {!isTerminal && swap.exchangeId && <button className="button button-quiet" disabled={refreshingSwapId === swap.exchangeId} onClick={() => refreshSwapStatus(swap.exchangeId)} type="button">{refreshingSwapId === swap.exchangeId ? 'Checking…' : 'Check status'}</button>}
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            )}
+          </section>
         </section>
       </main>
 
@@ -745,6 +879,7 @@ export default function SwapEngine({ user }) {
           </section>
         </div>
       )}
+      {copyToast && <div className="copy-toast" role="status" aria-live="polite">{copyToast.message}</div>}
     </div>
   )
 }
