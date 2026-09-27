@@ -641,7 +641,7 @@ export default function SwapEngine({ user }) {
                 </label>
                 <div className="flow-destination field-wide">
                   <span>RECEIVING AT</span>
-                  <strong>{form.fundingMethod === 'venmo' ? 'Trust Wallet' : 'Venmo'}</strong>
+                  <strong>{form.fundingMethod === 'venmo' ? 'Trust Wallet' : 'PayPal'}</strong>
                   <p>{form.fundingMethod === 'venmo' ? 'Send from Venmo to the ChangeNOW deposit address. ChangeNOW sends the exchanged crypto to your Trust Wallet address.' : isWalletNativeCurrency(selectedFromCurrency) ? 'After you approve, Trust Wallet sends this native coin to the ChangeNOW deposit address. ChangeNOW sends the exchanged crypto to your PayPal crypto address.' : 'After the tunnel is ready, send this asset from Trust Wallet to the ChangeNOW deposit address. ChangeNOW sends the exchanged crypto to your PayPal crypto address.'}</p>
                 </div>
                 <label>Amount to send ({form.fromCurrency.toUpperCase()})<input aria-describedby="minimum-send-note" name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
