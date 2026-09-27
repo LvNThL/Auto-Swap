@@ -49,7 +49,7 @@ export default function AccountTools({
             aria-controls="account-settings-panel"
             aria-expanded={menuOpen}
             aria-label={menuOpen ? 'Close settings menu' : 'Open settings menu'}
-            className={`settings-menu-button${loginPage ? ' settings-menu-button-login' : ''}`}
+            className="settings-menu-button"
             onClick={() => setMenuOpen((open) => !open)}
             ref={buttonRef}
             title="Settings and account"

@@ -80,8 +80,6 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .account-tools { border-color: var(--nav-line); background: var(--nav-surface); color: var(--nav-ink); }
 .settings-menu { position: relative; display: flex; }
 .settings-menu-button { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--nav-ink); cursor: pointer; }
-.settings-menu-button-login { border: 2px solid var(--nav-ink); border-radius: 7px; }
-.settings-menu-button-login:focus-visible { outline: 2px solid var(--nav-ink); outline-offset: 2px; }
 .settings-menu-button:hover { background: var(--nav-hover); }
 .settings-menu-button svg { width: 18px; height: 18px; }
 .settings-menu-panel { position: absolute; top: calc(100% + 9px); right: calc(-100% - 6px); z-index: 30; width: min(270px, calc(100vw - 24px)); padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); box-shadow: 0 14px 36px rgba(32,41,35,.16); }
@@ -241,10 +239,9 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .confirmation-list code { font-family: 'IBM Plex Mono', monospace; font-size: 10px; }
 .modal-warning { margin: 17px 0 21px; padding: 11px 12px; border-left: 2px solid var(--orange); background: var(--warning-bg); color: var(--warning-ink); font-size: 10px; line-height: 1.6; }
 .confirm-modal .form-actions { justify-content: space-between; }
-.auth-shell { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 72px 20px 30px; background: radial-gradient(ellipse at 78% 12%, var(--auth-glow), transparent 28rem), var(--page-bg); }
+.auth-shell { min-height: 100vh; display: grid; grid-template-rows: 72px minmax(0, 1fr); background: radial-gradient(ellipse at 78% 12%, var(--auth-glow), transparent 28rem), var(--page-bg); }
 .auth-shell { position: relative; }
-.auth-toolbar { position: absolute; top: 18px; right: 20px; z-index: 30; }
-.auth-brand { margin-bottom: 25px; }
+.auth-content { min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px 20px; }
 .auth-panel { width: min(430px, 100%); padding: 33px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); box-shadow: 0 18px 54px rgba(32,41,35,.07); }
 .auth-panel h1 { margin: 0; font-size: 26px; font-weight: 600; }
 .auth-panel > .muted { margin: 9px 0 24px; }
@@ -426,7 +423,6 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 @media (max-width: 400px) {
   .account-menu { gap: 5px; }
   .account-menu > .button { min-height: 34px; padding: 0 9px; }
-  .auth-toolbar { top: 12px; right: 12px; }
 }
 @media (max-width: 360px) {
   .account-tools .install-button { width: 30px; height: 30px; min-height: 30px; }
