@@ -44,32 +44,13 @@ function networkExplorerUrl(network, hash) {
   return base ? `${base}${encodeURIComponent(safeHash)}` : null
 }
 
-function normalizeFeeAmount(value) {
-  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? String(value) : null
-  if (typeof value !== 'string') return null
-  const amount = value.trim()
-  return /^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(amount) ? amount : null
-}
-
 function extractTransactionHistoryDetails(result = {}, networks = {}) {
-  const feeValue = result.networkFee && typeof result.networkFee === 'object'
-    ? result.networkFee.amount ?? result.networkFee.value
-    : result.networkFee
-  const feeCurrency = result.networkFee && typeof result.networkFee === 'object'
-    ? result.networkFee.currency ?? result.networkFee.asset
-    : result.networkFeeCurrency ?? result.feeCurrency
   const details = {}
-  const networkFee = normalizeFeeAmount(feeValue)
-  const networkFeeCurrency = typeof feeCurrency === 'string' && feeCurrency.trim()
-    ? feeCurrency.trim().toLowerCase()
-    : null
   const payinHash = normalizeTransactionHash(result.payinHash)
   const payoutHash = normalizeTransactionHash(result.payoutHash)
   const fromNetwork = result.fromNetwork ?? networks.fromNetwork
   const toNetwork = result.toNetwork ?? networks.toNetwork
 
-  if (networkFee !== null) details.networkFee = networkFee
-  if (networkFeeCurrency) details.networkFeeCurrency = networkFeeCurrency
   if (payinHash) {
     details.payinHash = payinHash
     details.payinExplorerUrl = networkExplorerUrl(fromNetwork, payinHash)

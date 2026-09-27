@@ -1,14 +1,12 @@
 import { useState } from 'react'
 import BrandMark from './BrandMark.jsx'
-import InstallAppControl from './InstallAppControl.jsx'
-import ThemeSelector from './ThemeSelector.jsx'
+import AccountTools from './AccountTools.jsx'
 import {
   browserLocalPersistence,
   browserSessionPersistence,
   createUserWithEmailAndPassword,
   sendEmailVerification,
   setPersistence,
-  signOut,
   signInWithEmailAndPassword,
 } from 'firebase/auth'
 import { auth } from '../firebase.js'
@@ -77,10 +75,7 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
   if (verificationUser) {
     return (
       <main className="auth-shell">
-        <div className="auth-toolbar">
-          <InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
-          <ThemeSelector onChange={onThemeChange} value={themePreference} />
-        </div>
+        <AccountTools className="auth-toolbar" installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onInstallPromptConsumed={onInstallPromptConsumed} onThemeChange={onThemeChange} themePreference={themePreference} user={verificationUser} />
         <div className="auth-brand"><BrandMark /><span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span></div>
         <section className="auth-panel">
           <p className="eyebrow">VERIFY YOUR EMAIL</p>
@@ -90,7 +85,6 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
           <div className="form-stack">
             <button className="button button-primary" onClick={checkVerification} type="button">I’ve verified my email</button>
             <button className="button button-quiet" onClick={resendVerification} type="button">Resend verification email</button>
-            <button className="text-button" onClick={() => signOut(auth)} type="button">Sign out</button>
           </div>
         </section>
       </main>
@@ -99,10 +93,7 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
 
   return (
     <main className="auth-shell">
-      <div className="auth-toolbar">
-        <InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
-        <ThemeSelector onChange={onThemeChange} value={themePreference} />
-      </div>
+      <AccountTools className="auth-toolbar" installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onInstallPromptConsumed={onInstallPromptConsumed} onThemeChange={onThemeChange} themePreference={themePreference} />
       <div className="auth-brand">
         <BrandMark />
         <span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span>

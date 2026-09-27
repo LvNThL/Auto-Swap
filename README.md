@@ -7,9 +7,9 @@ React + Vite PWA for preparing ChangeNOW swap routes. The browser never receives
 1. Install Node.js 22.12 or newer. In PowerShell, install Firebase CLI with `npm.cmd install --global firebase-tools`.
 2. Run `npm.cmd ci` at the project root and `npm.cmd ci` in `functions/`.
 3. Copy `.env.example` to `.env.local` and add the Firebase web app values. Firebase web configuration is public; access control comes from Firebase Auth and Firestore rules, not from hiding these values.
-4. Enable Email/Password sign-in in Firebase Authentication and create a Firestore database. Email verification is required before creating tunnels.
+4. Enable Email/Password sign-in in Firebase Authentication, create a Firestore database, and enable a private Cloud Storage bucket. Email verification is required before creating tunnels.
 5. Set the server-only exchange key with `firebase.cmd functions:secrets:set CHANGENOW_API_KEY`.
-6. Deploy with `firebase.cmd deploy --only functions,firestore:rules`, then start the app with `npm.cmd run dev`.
+6. Deploy with `firebase.cmd deploy --only functions,firestore:rules,firestore:indexes,storage`, then start the app with `npm.cmd run dev`. Firestore indexes may take several minutes to finish building.
 
 Cloud Functions deployment requires a Firebase project on the Blaze billing plan.
 
@@ -35,4 +35,5 @@ The GitHub Actions workflow builds the PWA with the repository path as Vite's ba
 - Callable functions require a signed-in, email-verified account and are capped at five instances each to limit burst scaling.
 - Saved records are validated server-side and capped at 25 presets and 50 address-book entries per account. The app-wide ceiling is 250 saved-record creates or edits per UTC day; deletes remain available.
 - Quote documents include an `expiresAt` timestamp, but Firestore does not delete them automatically until a TTL policy is enabled. In Google Cloud Console, open Firestore's Time-to-live page and create a policy for collection group `swapQuotes` using field `expiresAt`. TTL deletion is asynchronous (typically within 24 hours) and billed as document deletes.
-- Swap history is retained to preserve user history; each history read is limited to the latest 50 records. Configure billing budget alerts in Google Cloud Billing because alerts notify but do not cap spending.
+- Completed swap history is archived monthly to Cloud Storage and remains downloadable as a CSV for tax records. Still-processing swaps stay in Firestore. The first archive run is scheduled for 04:00 UTC on the first day of the month; scheduled functions require Cloud Scheduler and a billing-enabled Firebase project. Keep public access prevention enabled for the bucket; Firebase Storage rules deny client access because downloads are served through authenticated Functions.
+- The active history view returns the latest 50 records; older completed records appear in the monthly archive downloads. Archive files are retained indefinitely unless an operator removes them. Configure billing budget alerts in Google Cloud Billing because alerts notify but do not cap spending.

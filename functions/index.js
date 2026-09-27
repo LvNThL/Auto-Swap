@@ -1,10 +1,20 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https')
+const { onSchedule } = require('firebase-functions/v2/scheduler')
 const { defineSecret } = require('firebase-functions/params')
 const { initializeApp } = require('firebase-admin/app')
 const { getFirestore, Timestamp } = require('firebase-admin/firestore')
+const { getStorage } = require('firebase-admin/storage')
 const { quoteMatchesExchange, quoteMatchesPreset, quoteExpired } = require('./quote-validation')
 const { normalizeCurrencyCatalog } = require('./currency-catalog')
 const { depositReceived, pendingHistoryStatus } = require('./swap-history-status')
+const {
+  historyArchiveMonth,
+  historyArchivePath,
+  historyRecordsToCsv,
+  mergeArchiveRecords,
+  defaultStorageBucketName,
+  serializeSwapHistoryRecord,
+} = require('./history-archive')
 const { extractTransactionHistoryDetails } = require('./transaction-history-details')
 const {
   MAX_ADDRESS_BOOK_ENTRIES_PER_USER,
@@ -55,27 +65,20 @@ function swapHistoryCollection(uid) {
   return database.collection('users').doc(uid).collection('swapHistory')
 }
 
+function getArchiveBucket() {
+  let runtimeConfig = {}
+  try {
+    runtimeConfig = JSON.parse(process.env.FIREBASE_CONFIG ?? '{}')
+  } catch {}
+  const bucketName = defaultStorageBucketName({
+    storageBucket: runtimeConfig.storageBucket,
+    projectId: runtimeConfig.projectId ?? process.env.GCLOUD_PROJECT,
+  })
+  return bucketName ? getStorage().bucket(bucketName) : getStorage().bucket()
+}
+
 function serializeSwapHistory(snapshot) {
-  const record = snapshot.data()
-  return {
-    id: snapshot.id,
-    exchangeId: record.exchangeId ?? null,
-    fromCurrency: record.fromCurrency,
-    fromNetwork: record.fromNetwork,
-    fromAmount: record.fromAmount,
-    toCurrency: record.toCurrency,
-    toNetwork: record.toNetwork,
-    toAmount: record.toAmount ?? null,
-    networkFee: record.networkFee ?? null,
-    networkFeeCurrency: record.networkFeeCurrency ?? null,
-    payinHash: record.payinHash ?? null,
-    payoutHash: record.payoutHash ?? null,
-    payinExplorerUrl: record.payinExplorerUrl ?? null,
-    payoutExplorerUrl: record.payoutExplorerUrl ?? null,
-    status: record.status ?? 'unknown',
-    createdAt: record.createdAt?.toMillis() ?? null,
-    updatedAt: record.updatedAt?.toMillis() ?? null,
-  }
+  return serializeSwapHistoryRecord(snapshot.id, snapshot.data())
 }
 
 function getUserRecordUsageRef(uid) {
@@ -600,8 +603,6 @@ exports.getSwapHistory = onCall(
         toCurrency: pendingDoc.get('toCurrency'),
         toNetwork: pendingDoc.get('toNetwork'),
         estimatedAmount: pendingDoc.get('estimatedAmount') ?? null,
-        networkFee: pendingDoc.get('networkFee') ?? null,
-        networkFeeCurrency: pendingDoc.get('networkFeeCurrency') ?? null,
         payinHash: pendingDoc.get('payinHash') ?? null,
         payoutHash: pendingDoc.get('payoutHash') ?? null,
         payinExplorerUrl: pendingDoc.get('payinExplorerUrl') ?? null,
@@ -609,6 +610,134 @@ exports.getSwapHistory = onCall(
         createdAt: pendingDoc.get('tunnelOpenedAt')?.toMillis() ?? pendingDoc.get('createdAt')?.toMillis() ?? null,
         accessExpiresAt: pendingDoc.get('tunnelAccessExpiresAt')?.toMillis() ?? null,
       })),
+    }
+  },
+)
+
+async function saveMonthlyHistoryArchive(bucket, userId, month, records) {
+  const file = bucket.file(historyArchivePath(userId, month))
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    let existingRecords = []
+    let generation = 0
+    const [exists] = await file.exists()
+    if (exists) {
+      const [metadata] = await file.getMetadata()
+      generation = metadata.generation
+      const [contents] = await file.download()
+      existingRecords = JSON.parse(contents.toString('utf8'))
+      if (!Array.isArray(existingRecords)) throw new Error(`Invalid swap history archive: ${file.name}`)
+    }
+
+    const mergedRecords = mergeArchiveRecords(existingRecords, records)
+    try {
+      await file.save(JSON.stringify(mergedRecords), {
+        resumable: false,
+        preconditionOpts: { ifGenerationMatch: generation },
+        metadata: {
+          contentType: 'application/json',
+          cacheControl: 'private, no-store',
+        },
+      })
+      return
+    } catch (error) {
+      if (Number(error.code) !== 412 || attempt === 4) throw error
+    }
+  }
+}
+
+exports.archiveMonthlySwapHistory = onSchedule(
+  { schedule: '0 4 1 * *', timeZone: 'UTC', region: 'us-central1', maxInstances: 1, timeoutSeconds: 540 },
+  async () => {
+    const now = new Date()
+    const monthStart = Timestamp.fromMillis(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    const bucket = getArchiveBucket()
+    let cursor = null
+    let archivedCount = 0
+
+    while (true) {
+      let query = database.collectionGroup('swapHistory')
+        .where('createdAt', '<', monthStart)
+        .orderBy('createdAt', 'asc')
+        .limit(100)
+      if (cursor) query = query.startAfter(cursor)
+
+      const snapshot = await query.get()
+      if (snapshot.empty) break
+
+      const groups = new Map()
+      for (const document of snapshot.docs) {
+        const record = document.data()
+        if (!terminalSwapStatuses.has(String(record.status ?? '').toLowerCase())) continue
+        const userId = document.ref.parent.parent?.id
+        const createdAt = typeof record.createdAt?.toMillis === 'function' ? record.createdAt.toMillis() : null
+        const month = historyArchiveMonth(createdAt)
+        if (!userId || !month) continue
+
+        const groupKey = `${userId}/${month}`
+        const group = groups.get(groupKey) ?? { userId, month, documents: [] }
+        group.documents.push(document)
+        groups.set(groupKey, group)
+      }
+
+      for (const { userId, month, documents } of groups.values()) {
+        const records = documents.map((document) =>
+          serializeSwapHistoryRecord(document.id, document.data()))
+        await saveMonthlyHistoryArchive(bucket, userId, month, records)
+
+        const batch = database.batch()
+        for (const document of documents) batch.delete(document.ref)
+        await batch.commit()
+        archivedCount += documents.length
+      }
+
+      cursor = snapshot.docs[snapshot.docs.length - 1]
+      if (snapshot.size < 100) break
+    }
+
+    console.info('Archived completed swap history records:', archivedCount)
+  },
+)
+
+exports.getSwapHistoryArchives = onCall(
+  { region: 'us-central1', maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  async (request) => {
+    assertVerifiedUser(request)
+    const prefix = `users/${request.auth.uid}/swap-history-archive/`
+    const [files] = await getArchiveBucket().getFiles({ prefix })
+    const months = files.flatMap((file) => {
+      const match = file.name.slice(prefix.length).match(/^(\d{4}-(?:0[1-9]|1[0-2]))\.json$/)
+      return match ? [match[1]] : []
+    })
+
+    return { archives: [...new Set(months)].sort().reverse() }
+  },
+)
+
+exports.downloadSwapHistoryArchive = onCall(
+  { region: 'us-central1', maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  async (request) => {
+    assertVerifiedUser(request)
+    const month = requiredString(request.data?.month, 'month', 7)
+    if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month)) {
+      throw new HttpsError('invalid-argument', 'Invalid archive month.')
+    }
+
+    const file = getArchiveBucket().file(historyArchivePath(request.auth.uid, month))
+    const [exists] = await file.exists()
+    if (!exists) throw new HttpsError('not-found', 'This monthly archive is not available.')
+
+    try {
+      const [contents] = await file.download()
+      const records = JSON.parse(contents.toString('utf8'))
+      if (!Array.isArray(records)) throw new Error('Archive is not a record list.')
+      return {
+        filename: `autoswap-swap-history-${month}.csv`,
+        csv: historyRecordsToCsv(records),
+      }
+    } catch (error) {
+      console.error('Could not read swap history archive:', error.message)
+      throw new HttpsError('unavailable', 'This history archive could not be opened. Please try again later.')
     }
   },
 )

@@ -1,11 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
-import { signOut } from 'firebase/auth'
 import Select from 'react-select'
 import { auth, functions, isFirebaseConfigured } from '../firebase.js'
+import AccountTools from './AccountTools.jsx'
 import BrandMark from './BrandMark.jsx'
-import InstallAppControl from './InstallAppControl.jsx'
-import ThemeSelector from './ThemeSelector.jsx'
 import {
   createAddressBookEntry,
   deleteAddressBookEntry,
@@ -156,7 +154,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [editingPresetId, setEditingPresetId] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [tunnelNotice, setTunnelNotice] = useState('')
   const [error, setError] = useState('')
@@ -165,12 +162,13 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [tunnelPreset, setTunnelPreset] = useState(null)
   const [swapHistory, setSwapHistory] = useState([])
   const [pendingSwaps, setPendingSwaps] = useState([])
+  const [historyArchives, setHistoryArchives] = useState([])
+  const [archiveError, setArchiveError] = useState('')
+  const [archiveDownloadBusy, setArchiveDownloadBusy] = useState('')
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
   const [copyToast, setCopyToast] = useState(null)
   const [clockNow, setClockNow] = useState(() => Date.now())
-  const settingsMenuRef = useRef(null)
-  const settingsButtonRef = useRef(null)
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
   const persistedTunnel = pendingSwaps
@@ -234,6 +232,34 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setPendingSwaps(data.pendingSwaps ?? [])
   }
 
+  async function loadHistoryArchives() {
+    const getArchives = httpsCallable(functions, 'getSwapHistoryArchives')
+    const { data } = await getArchives({})
+    setHistoryArchives(data.archives ?? [])
+    setArchiveError('')
+  }
+
+  async function downloadHistoryArchive(month) {
+    setArchiveDownloadBusy(month)
+    setArchiveError('')
+    try {
+      const downloadArchive = httpsCallable(functions, 'downloadSwapHistoryArchive')
+      const { data } = await downloadArchive({ month })
+      const objectUrl = URL.createObjectURL(new Blob([data.csv], { type: 'text/csv;charset=utf-8' }))
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = data.filename
+      document.body.append(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+    } catch {
+      setArchiveError('This monthly archive could not be downloaded. Please try again.')
+    } finally {
+      setArchiveDownloadBusy('')
+    }
+  }
+
   async function copyToClipboard(value, label, target) {
     try {
       await navigator.clipboard.writeText(value)
@@ -248,27 +274,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     const timeout = window.setTimeout(() => setCopyToast(null), 2200)
     return () => window.clearTimeout(timeout)
   }, [copyToast])
-
-  useEffect(() => {
-    if (!settingsOpen) return undefined
-
-    function closeOnPointerDown(event) {
-      if (!settingsMenuRef.current?.contains(event.target)) setSettingsOpen(false)
-    }
-
-    function closeOnEscape(event) {
-      if (event.key !== 'Escape') return
-      setSettingsOpen(false)
-      settingsButtonRef.current?.focus()
-    }
-
-    document.addEventListener('pointerdown', closeOnPointerDown)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOnPointerDown)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [settingsOpen])
 
   useEffect(() => {
     if (!activeTunnel) return undefined
@@ -343,6 +348,9 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     }
 
     loadHistory()
+    loadHistoryArchives().catch(() => {
+      if (active) setArchiveError('Monthly archives could not be loaded. Your current swap history is unaffected.')
+    })
     const interval = window.setInterval(pollHistory, 15000)
     return () => {
       active = false
@@ -737,39 +745,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           <BrandMark />
           <span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span>
         </a>
-        <div className="account-menu">
-          <div className="account-tools">
-            <div className="settings-menu" ref={settingsMenuRef}>
-              <button
-                aria-controls="account-settings-panel"
-                aria-expanded={settingsOpen}
-                aria-label={settingsOpen ? 'Close settings menu' : 'Open settings menu'}
-                className="settings-menu-button"
-                onClick={() => setSettingsOpen((open) => !open)}
-                ref={settingsButtonRef}
-                title="Settings and account"
-                type="button"
-              >
-                <svg aria-hidden="true" focusable="false" viewBox="0 0 20 20">
-                  <path d="M4 6h12M4 10h12M4 14h12" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
-                </svg>
-              </button>
-              {settingsOpen && (
-                <div className="settings-menu-panel" id="account-settings-panel" aria-label="Settings and account">
-                  <div className="settings-theme-row">
-                    <span>Theme</span>
-                    <ThemeSelector className="settings-theme" onChange={(theme) => { onThemeChange(theme); setSettingsOpen(false) }} value={themePreference} />
-                  </div>
-                  <div className="settings-account-row">
-                    <span className="settings-account-email" title={user.email}>{user.email || 'Signed in'}</span>
-                    <button className="button button-quiet settings-sign-out" onClick={() => { setSettingsOpen(false); signOut(auth) }} type="button">Sign out</button>
-                  </div>
-                </div>
-              )}
-            </div>
-            <InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
-          </div>
-        </div>
+        <AccountTools installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onInstallPromptConsumed={onInstallPromptConsumed} onThemeChange={onThemeChange} themePreference={themePreference} user={user} />
       </header>
 
       <main className="workspace">
@@ -977,9 +953,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                         <small>{swap.fromAmount} {swap.fromCurrency?.toUpperCase()} ({swap.fromNetwork?.toUpperCase()}) → {swap.toCurrency?.toUpperCase()} ({swap.toNetwork?.toUpperCase()})</small>
                         <small>{swap.createdAt ? new Date(swap.createdAt).toLocaleString() : 'Date unavailable'}{swap.toAmount ? ` · ${status === 'finished' ? 'Received' : 'Est. receive'} ${swap.toAmount} ${swap.toCurrency?.toUpperCase()}` : ''}</small>
                         {swap.exchangeId && <small>Exchange ID: <code>{swap.exchangeId}</code></small>}
-                        <small>{swap.networkFee != null
-                          ? `Network fee: ${swap.networkFee}${swap.networkFeeCurrency ? ` ${swap.networkFeeCurrency.toUpperCase()}` : ' (currency not reported)'}`
-                          : `Network fee: ${swap.pending ? 'not available yet' : 'not reported by ChangeNOW'}`}</small>
                         {(swap.payinExplorerUrl || swap.payoutExplorerUrl) && (
                           <div className="history-blockchain-links">
                             {swap.payinExplorerUrl && <a className="history-blockchain-link" href={swap.payinExplorerUrl} rel="noopener noreferrer" target="_blank">View deposit on blockchain</a>}
@@ -995,6 +968,21 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                 })}
               </div>
             )}
+            <div className="history-archives">
+              <div className="history-archives-heading">
+                <div><strong>Monthly tax archives</strong><small>Completed executions are retained for download.</small></div>
+                <button className="button button-quiet" disabled={historyLoading} onClick={() => loadHistoryArchives().catch(() => setArchiveError('Monthly archives could not be loaded. Please try again.'))} type="button">Refresh</button>
+              </div>
+              {archiveError && <div className="notice notice-warning" role="status">{archiveError}</div>}
+              {historyArchives.length === 0
+                ? !archiveError && <p className="history-empty">Monthly archives will appear here after the first archive run.</p>
+                : <ul className="history-archive-list">{historyArchives.map((month) => (
+                  <li className="history-archive-item" key={month}>
+                    <span>{new Date(`${month}-01T00:00:00Z`).toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' })}</span>
+                    <button className="button button-quiet" disabled={archiveDownloadBusy !== ''} onClick={() => downloadHistoryArchive(month)} type="button">{archiveDownloadBusy === month ? 'Preparing…' : 'Download CSV'}</button>
+                  </li>
+                ))}</ul>}
+            </div>
           </section>
         </section>
       </main>
