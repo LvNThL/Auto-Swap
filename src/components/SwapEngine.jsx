@@ -89,10 +89,7 @@ function formatEstimatedRate(fromAmount, estimatedAmount, fromTicker, toTicker) 
 
 function searchCurrencies(currencies, query) {
   const normalizedQuery = query.trim().toLowerCase()
-  if (!normalizedQuery) {
-    const featured = currencies.filter((currency) => currency.featured)
-    return featured.length ? featured : currencies.slice(0, 20)
-  }
+  if (!normalizedQuery) return currencies
 
   return currencies.filter((currency) =>
     `${currency.name} ${currency.ticker} ${currency.network}`.toLowerCase().includes(normalizedQuery))
