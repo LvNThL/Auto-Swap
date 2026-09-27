@@ -2,6 +2,7 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https')
 const { defineSecret } = require('firebase-functions/params')
 const { initializeApp } = require('firebase-admin/app')
 const { getFirestore, Timestamp } = require('firebase-admin/firestore')
+const { quoteMatchesExchange, quoteExpired } = require('./quote-validation')
 
 initializeApp()
 
@@ -10,6 +11,7 @@ const database = getFirestore()
 const CHANGE_NOW_URL = 'https://api.changenow.io/v2/exchange'
 const QUOTE_COOLDOWN_MS = 2000
 const CREATE_COOLDOWN_MS = 10000
+const QUOTE_TTL_MS = 60000
 
 function requiredString(value, field, maxLength = 160) {
   if (typeof value !== 'string' || !value.trim() || value.length > maxLength) {
@@ -29,6 +31,42 @@ async function enforceRequestCooldown(uid, action, cooldownMs) {
       throw new HttpsError('resource-exhausted', 'Wait a few seconds before trying this action again.')
     }
 
+    transaction.set(rateLimitRef, { lastRequestAt: Timestamp.fromMillis(now) })
+  })
+}
+
+async function consumeQuote(uid, quoteId, exchange) {
+  const quoteRef = database.collection('users').doc(uid).collection('swapQuotes').doc(quoteId)
+  const rateLimitRef = database.collection('_swapRateLimits').doc(`${uid}-create`)
+
+  await database.runTransaction(async (transaction) => {
+    const [quoteSnapshot, rateLimitSnapshot] = await Promise.all([
+      transaction.get(quoteRef),
+      transaction.get(rateLimitRef),
+    ])
+
+    if (!quoteSnapshot.exists) {
+      throw new HttpsError('failed-precondition', 'Quote is missing or does not belong to this account. Request a new quote.')
+    }
+
+    const quote = quoteSnapshot.data()
+    const now = Date.now()
+    if (quote.userId !== uid || !quote.expiresAt || quoteExpired(quote.expiresAt.toMillis(), now)) {
+      throw new HttpsError('failed-precondition', 'Quote expired. Request a new quote before creating the tunnel.')
+    }
+    if (quote.consumedAt) {
+      throw new HttpsError('failed-precondition', 'This quote has already been used. Request a new quote.')
+    }
+    if (!quoteMatchesExchange(quote, exchange)) {
+      throw new HttpsError('failed-precondition', 'Route details changed after quoting. Request a new quote and confirm those details.')
+    }
+
+    const lastRequestAt = rateLimitSnapshot.data()?.lastRequestAt?.toMillis() ?? 0
+    if (now - lastRequestAt < CREATE_COOLDOWN_MS) {
+      throw new HttpsError('resource-exhausted', 'Wait a few seconds before creating another tunnel.')
+    }
+
+    transaction.update(quoteRef, { consumedAt: Timestamp.fromMillis(now) })
     transaction.set(rateLimitRef, { lastRequestAt: Timestamp.fromMillis(now) })
   })
 }
@@ -123,6 +161,8 @@ exports.getSwapQuote = onCall(
   async (request) => {
     assertVerifiedUser(request)
     const exchange = validateExchangeRequest(request.data)
+    const toAddress = requiredString(exchange.toAddress, 'toAddress', 256)
+    const quotedExchange = { ...exchange, toAddress }
 
     await enforceRequestCooldown(request.auth.uid, 'quote', QUOTE_COOLDOWN_MS)
     const minimum = await callChangeNow(`/min-amount?${buildQuery(exchange)}`)
@@ -141,12 +181,27 @@ exports.getSwapQuote = onCall(
       throw new HttpsError('unavailable', 'ChangeNOW returned an invalid estimate response.')
     }
 
+    const quotedAt = Date.now()
+    const quoteExpiresAt = quotedAt + QUOTE_TTL_MS
+    const quoteRef = database.collection('users').doc(request.auth.uid).collection('swapQuotes').doc()
+    await quoteRef.create({
+      userId: request.auth.uid,
+      ...quotedExchange,
+      minimumAmount: String(minimumAmount),
+      estimatedAmount: String(estimatedAmount),
+      createdAt: Timestamp.fromMillis(quotedAt),
+      expiresAt: Timestamp.fromMillis(quoteExpiresAt),
+      consumedAt: null,
+    })
+
     return {
+      quoteId: quoteRef.id,
       minimumAmount: String(minimumAmount),
       estimatedAmount: String(estimatedAmount),
       transactionSpeedForecast: estimate.transactionSpeedForecast ?? null,
       warningMessage: estimate.warningMessage ?? null,
-      quotedAt: Date.now(),
+      quotedAt,
+      quoteExpiresAt,
     }
   },
 )
@@ -157,8 +212,9 @@ exports.createSwapTunnel = onCall(
     assertVerifiedUser(request)
     const exchange = validateExchangeRequest(request.data)
     const toAddress = requiredString(exchange.toAddress, 'toAddress', 256)
+    const quoteId = requiredString(request.data?.quoteId, 'quoteId', 128)
 
-    await enforceRequestCooldown(request.auth.uid, 'create', CREATE_COOLDOWN_MS)
+    await consumeQuote(request.auth.uid, quoteId, { ...exchange, toAddress })
     const result = await callChangeNow('', {
       method: 'POST',
       body: {

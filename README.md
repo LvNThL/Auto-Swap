@@ -20,7 +20,7 @@ For WalletConnect, create a WalletConnect Cloud project and set `VITE_WALLETCONN
 - A Venmo route creates a ChangeNOW tunnel and displays its pay-in address for manual sending. Venmo asset/network support varies by region and account.
 - A Trust Wallet route checks the configured native EVM coin/network pair, creates the tunnel, then asks the connected wallet to send that coin to the returned pay-in address. The user must approve the separate transaction in their wallet. This starter intentionally does not submit ERC-20 token transfers.
 - The destination must be a supported cryptocurrency address. A PayPal email/account is not itself a crypto deposit address; use a valid external crypto address only if PayPal supports that asset and network for your account. ChangeNOW availability and payout support must be verified before relying on a route.
-- The app checks ChangeNOW's minimum and estimated receive amount before confirmation. Standard-flow estimates are indicative, not a guaranteed quote. Confirm the API key's endpoint access and current v2 response schema before handling real funds.
+- The app checks ChangeNOW's minimum and estimated receive amount before confirmation. The server binds tunnel creation to the authenticated user's exact route and destination quote, expires quotes after one minute, and consumes each quote once. Standard-flow estimates are still indicative, not a guaranteed quote. Confirm the API key's endpoint access and current v2 response schema before handling real funds.
 
 ## Static hosting
 

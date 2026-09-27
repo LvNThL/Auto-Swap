@@ -128,7 +128,7 @@ export default function SwapEngine({ user }) {
     return provider
   }
 
-  async function createTunnel(preset) {
+  async function createTunnel(preset, quoteId) {
     const create = httpsCallable(functions, 'createSwapTunnel')
     const result = await create({
       fromCurrency: preset.fromCurrency,
@@ -137,6 +137,7 @@ export default function SwapEngine({ user }) {
       toNetwork: preset.toNetwork,
       fromAmount: preset.fromAmount,
       toAddress: preset.destinationAddress,
+      quoteId,
     })
     return result.data
   }
@@ -146,6 +147,7 @@ export default function SwapEngine({ user }) {
     setBusy(true)
     setError('')
     setNotice('Checking the current minimum and estimate…')
+    setQuote(null)
 
     try {
       if (selectedPreset.fundingMethod === 'trust-wallet') {
@@ -179,7 +181,13 @@ export default function SwapEngine({ user }) {
   }
 
   async function confirmSwap() {
-    if (!selectedPreset || !quote) return
+    if (!selectedPreset || !quote?.quoteId) return
+    if (Date.now() >= quote.quoteExpiresAt) {
+      setQuote(null)
+      setConfirming(false)
+      setError('Quote expired. Request a new quote before creating the tunnel.')
+      return
+    }
     setBusy(true)
     setError('')
     setNotice('Creating a swap tunnel…')
@@ -198,7 +206,7 @@ export default function SwapEngine({ user }) {
         }
       }
 
-      const created = await createTunnel(selectedPreset)
+      const created = await createTunnel(selectedPreset, quote.quoteId)
       if (!created.payinAddress) throw new Error('ChangeNOW did not return a deposit address. The exchange may not support this route.')
       setTunnel(created)
       setQuote(null)
@@ -228,6 +236,7 @@ export default function SwapEngine({ user }) {
     } catch (swapError) {
       setError(getErrorMessage(swapError))
       setNotice('')
+      setQuote(null)
     } finally {
       setBusy(false)
     }
@@ -337,12 +346,12 @@ export default function SwapEngine({ user }) {
         </section>
       </main>
 
-      {confirming && selectedPreset && quote && (
+      {confirming && selectedPreset && quote?.quoteId && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setConfirming(false) }}>
           <section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
             <p className="eyebrow">FINAL REVIEW</p>
             <h2 id="confirm-title">Confirm this route?</h2>
-            <p className="muted">Review the live estimate before creating a deposit tunnel.</p>
+            <p className="muted">Review the live estimate before creating a deposit tunnel. This quote expires at {new Date(quote.quoteExpiresAt).toLocaleTimeString()}.</p>
             <dl className="confirmation-list">
               <div><dt>Send</dt><dd>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} on {selectedPreset.fromNetwork}</dd></div>
               <div><dt>Receive</dt><dd>{selectedPreset.toCurrency?.toUpperCase()} on {selectedPreset.toNetwork}</dd></div>
