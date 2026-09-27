@@ -12,27 +12,17 @@ import { createPreset, deletePreset, listPresets, updatePreset } from '../servic
 
 const emptyPreset = {
   name: '',
-  fundingMethod: 'venmo',
+  sourceName: '',
   fromCurrency: 'btc',
   fromNetwork: 'btc',
   toCurrency: 'eth',
   toNetwork: 'eth',
   fromAmount: '',
-  destinationName: 'Trust Wallet',
+  destinationName: '',
   destinationAddress: '',
   destinationExtraId: '',
   refundAddress: '',
   refundExtraId: '',
-}
-
-const nativeEvmRoutes = {
-  eth: { chainId: 1, currencies: ['eth'] },
-  matic: { chainId: 137, currencies: ['matic', 'pol'] },
-  bsc: { chainId: 56, currencies: ['bnb'] },
-  arbitrum: { chainId: 42161, currencies: ['eth'] },
-  op: { chainId: 10, currencies: ['eth'] },
-  base: { chainId: 8453, currencies: ['eth'] },
-  avaxc: { chainId: 43114, currencies: ['avax'] },
 }
 
 function currencyGroups(currencies) {
@@ -99,12 +89,13 @@ function searchCurrencies(currencies, query) {
     `${currency.name} ${currency.ticker} ${currency.network}`.toLowerCase().includes(normalizedQuery))
 }
 
-function isWalletNativeCurrency(currency) {
-  return Boolean(
-    currency &&
-    !currency.tokenContract &&
-    nativeEvmRoutes[currency.network]?.currencies.includes(currency.ticker),
-  )
+function getSourceWalletName(preset) {
+  return preset.sourceName?.trim() || 'Source wallet'
+}
+
+function getDestinationWalletName(preset) {
+  if (typeof preset.sourceName === 'undefined') return 'Destination wallet'
+  return preset.destinationName?.trim() || 'Destination wallet'
 }
 
 function getErrorMessage(error) {
@@ -151,6 +142,7 @@ export default function SwapEngine({ user }) {
     currency.ticker === form.fromCurrency && currency.network === form.fromNetwork)
   const selectedToCurrency = currencies.find((currency) =>
     currency.ticker === form.toCurrency && currency.network === form.toNetwork)
+  const formDestinationWalletName = getDestinationWalletName(form)
   const estimatedRate = quote && selectedPreset
     ? formatEstimatedRate(selectedPreset.fromAmount, quote.estimatedAmount, selectedPreset.fromCurrency, selectedPreset.toCurrency)
     : null
@@ -244,15 +236,6 @@ export default function SwapEngine({ user }) {
 
   function updateForm(event) {
     const { name, value } = event.target
-    if (name === 'fundingMethod') {
-      setForm((current) => ({
-        ...current,
-        fundingMethod: value,
-        destinationName: value === 'venmo' ? 'Trust Wallet' : 'PayPal',
-      }))
-      return
-    }
-
     setForm((current) => ({
       ...current,
       [name]: value,
@@ -336,13 +319,15 @@ export default function SwapEngine({ user }) {
     if (!selectedPreset) return
     setForm({
       name: selectedPreset.name ?? '',
-      fundingMethod: selectedPreset.fundingMethod ?? emptyPreset.fundingMethod,
+      sourceName: selectedPreset.sourceName ?? '',
       fromCurrency: selectedPreset.fromCurrency ?? emptyPreset.fromCurrency,
       fromNetwork: selectedPreset.fromNetwork ?? emptyPreset.fromNetwork,
       toCurrency: selectedPreset.toCurrency ?? emptyPreset.toCurrency,
       toNetwork: selectedPreset.toNetwork ?? emptyPreset.toNetwork,
       fromAmount: selectedPreset.fromAmount ?? '',
-      destinationName: selectedPreset.destinationName ?? '',
+      destinationName: typeof selectedPreset.sourceName === 'undefined'
+        ? ''
+        : selectedPreset.destinationName ?? '',
       destinationAddress: selectedPreset.destinationAddress ?? '',
       destinationExtraId: selectedPreset.destinationExtraId ?? '',
       refundAddress: selectedPreset.refundAddress ?? '',
@@ -392,15 +377,13 @@ export default function SwapEngine({ user }) {
       const preset = {
         ...form,
         name: form.name.trim(),
-        destinationName: form.fundingMethod === 'venmo' ? 'Trust Wallet' : 'PayPal',
+        sourceName: form.sourceName.trim(),
+        destinationName: form.destinationName.trim(),
         destinationAddress: form.destinationAddress.trim(),
         fromAmount: form.fromAmount.trim(),
         destinationExtraId: form.destinationExtraId.trim(),
         refundAddress: form.refundAddress.trim(),
         refundExtraId: form.refundExtraId.trim(),
-        chainId: form.fundingMethod === 'trust-wallet'
-          ? nativeEvmRoutes[form.fromNetwork]?.chainId ?? null
-          : null,
       }
       if (editingPresetId) {
         await updatePreset(user.uid, editingPresetId, preset)
@@ -436,36 +419,6 @@ export default function SwapEngine({ user }) {
     }
   }
 
-  async function getWalletProvider(chainId) {
-    const trustWalletProvider = window.ethereum?.isTrust || window.ethereum?.isTrustWallet
-      ? window.ethereum
-      : null
-    if (trustWalletProvider) {
-      await trustWalletProvider.request({ method: 'eth_requestAccounts' })
-      return trustWalletProvider
-    }
-
-    const projectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID
-    if (!projectId) throw new Error('Add VITE_WALLETCONNECT_PROJECT_ID to connect Trust Wallet with WalletConnect.')
-
-    const { default: EthereumProvider } = await import('@walletconnect/ethereum-provider')
-    const provider = await EthereumProvider.init({
-      projectId,
-      chains: [Number(chainId)],
-      showQrModal: true,
-      methods: ['eth_sendTransaction', 'personal_sign'],
-      events: ['chainChanged', 'accountsChanged'],
-      metadata: {
-        name: 'AutoSwap Route Desk',
-        description: 'Review and send a confirmed swap deposit.',
-        url: window.location.origin,
-        icons: [],
-      },
-    })
-    await provider.connect()
-    return provider
-  }
-
   async function createTunnel(preset, quoteId) {
     const create = httpsCallable(functions, 'createSwapTunnel')
     const result = await create({
@@ -491,15 +444,6 @@ export default function SwapEngine({ user }) {
     setQuote(null)
 
     try {
-      if (selectedPreset.fundingMethod === 'trust-wallet') {
-        const route = nativeEvmRoutes[selectedPreset.fromNetwork?.toLowerCase()]
-        const sourceCurrency = currencies.find((currency) =>
-          currency.ticker === selectedPreset.fromCurrency && currency.network === selectedPreset.fromNetwork)
-        if (isWalletNativeCurrency(sourceCurrency) && Number(selectedPreset.chainId) !== route?.chainId) {
-          throw new Error(`This route requires chain ${route.chainId} for ${selectedPreset.fromNetwork}.`)
-        }
-      }
-
       const getQuote = httpsCallable(functions, 'getSwapQuote')
       const result = await getQuote({
         fromCurrency: selectedPreset.fromCurrency,
@@ -539,46 +483,14 @@ export default function SwapEngine({ user }) {
     setTunnelPreset(null)
 
     try {
-      let route = null
-      if (selectedPreset.fundingMethod === 'trust-wallet') {
-        route = nativeEvmRoutes[selectedPreset.fromNetwork?.toLowerCase()]
-        const sourceCurrency = currencies.find((currency) =>
-          currency.ticker === selectedPreset.fromCurrency && currency.network === selectedPreset.fromNetwork)
-        if (!isWalletNativeCurrency(sourceCurrency)) route = null
-        if (route && Number(selectedPreset.chainId) !== route.chainId) {
-          throw new Error(`This route requires chain ${route.chainId} for ${selectedPreset.fromNetwork}.`)
-        }
-      }
-
       const created = await createTunnel(selectedPreset, quote.quoteId)
       if (!created.payinAddress) throw new Error('ChangeNOW did not return a deposit address. The exchange may not support this route.')
       setTunnel(created)
       setTunnelPreset(selectedPreset)
       setQuote(null)
 
-      if (selectedPreset.fundingMethod === 'venmo' || !route) {
-        const sourceWallet = selectedPreset.fundingMethod === 'venmo' ? 'Venmo' : 'Trust Wallet'
-        setNotice(`Tunnel ready. Send only ${selectedPreset.fromCurrency?.toUpperCase()} on ${selectedPreset.fromNetwork?.toUpperCase()} from ${sourceWallet} to this address.`)
-        return
-      }
-
-      const walletProvider = await getWalletProvider(route.chainId)
-      const { BrowserProvider, parseUnits } = await import('ethers')
-      const provider = new BrowserProvider(walletProvider)
-      const network = await provider.getNetwork()
-      if (Number(network.chainId) !== route.chainId) {
-        throw new Error(`Connected wallet is on chain ${network.chainId}; this route requires chain ${route.chainId}.`)
-      }
-
-      const signer = await provider.getSigner()
-      // The user confirmed the route above; the wallet independently displays and authorizes
-      // this native-coin recipient, amount, and network before broadcasting anything.
-      const transaction = await signer.sendTransaction({
-        to: created.payinAddress,
-        value: parseUnits(selectedPreset.fromAmount, 18),
-      })
-      setTunnel({ ...created, transactionHash: transaction.hash })
-      setNotice('Deposit transaction submitted. Wait for the exchange to detect the transfer.')
+      const sourceWallet = getSourceWalletName(selectedPreset)
+      setNotice(`Tunnel ready. Send only ${selectedPreset.fromCurrency?.toUpperCase()} on ${selectedPreset.fromNetwork?.toUpperCase()} from ${sourceWallet} to this address.`)
     } catch (swapError) {
       setError(getErrorMessage(swapError))
       setNotice('')
@@ -618,7 +530,7 @@ export default function SwapEngine({ user }) {
               >
                 <span className="route-item-top"><span>{preset.name}</span><span className="route-dot" /></span>
                 <span className="route-item-path">{preset.fromCurrency?.toUpperCase()} <b>→</b> {preset.toCurrency?.toUpperCase()}</span>
-                <span className="route-item-mode">{preset.fundingMethod === 'venmo' ? 'VENMO → TRUST WALLET' : 'TRUST WALLET → PAYPAL'}</span>
+                <span className="route-item-mode">MANUAL DEPOSIT</span>
               </button>
             ))}
           </nav>
@@ -641,7 +553,7 @@ export default function SwapEngine({ user }) {
               <form className="preset-form" onSubmit={savePreset}>
                 <label className="field-wide">Saved preset name<input name="name" value={form.name} onChange={updateForm} placeholder="For example, BTC to ETH" maxLength="48" required /></label>
                 <p className="field-note field-wide">Use this name to identify the saved route later. It does not affect the swap.</p>
-                <label className="field-wide">Swap direction<select name="fundingMethod" value={form.fundingMethod} onChange={updateForm}><option value="venmo">Venmo → Trust Wallet · send manually</option><option value="trust-wallet">Trust Wallet → PayPal · approve native coins; send other assets manually</option></select></label>
+                <label className="field-wide">Source wallet or app (optional)<input name="sourceName" value={form.sourceName} onChange={updateForm} placeholder="For your reference" maxLength="48" /></label>
                 {currenciesLoading && <p className="field-note field-wide" role="status">Loading ChangeNOW assets…</p>}
                 {currencyError && <div className="notice notice-error field-wide" role="alert">{currencyError}<button className="button button-quiet" onClick={() => setCurrencyReloadKey((key) => key + 1)} type="button">Reload assets</button></div>}
                 <label className="field-wide">Send crypto from
@@ -707,8 +619,8 @@ export default function SwapEngine({ user }) {
                 </label>
                 <div className="flow-destination field-wide">
                   <span>RECEIVING AT</span>
-                  <strong>{form.fundingMethod === 'venmo' ? 'Trust Wallet' : 'PayPal'}</strong>
-                  <p>{form.fundingMethod === 'venmo' ? 'Send from Venmo to the ChangeNOW deposit address. ChangeNOW sends the exchanged crypto to your Trust Wallet address.' : isWalletNativeCurrency(selectedFromCurrency) ? 'After you approve, Trust Wallet sends this native coin to the ChangeNOW deposit address. ChangeNOW sends the exchanged crypto to your PayPal crypto address.' : 'After the tunnel is ready, send this asset from Trust Wallet to the ChangeNOW deposit address. ChangeNOW sends the exchanged crypto to your PayPal crypto address.'}</p>
+                  <strong>{formDestinationWalletName}</strong>
+                  <p>After the quote is confirmed, send the selected asset on its selected network from any compatible wallet to the ChangeNOW deposit address. The exchanged asset will be sent to your destination address.</p>
                 </div>
                 <label>Amount to send ({form.fromCurrency.toUpperCase()})<input aria-describedby="minimum-send-note" name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
                 <p className="field-note field-wide" id="minimum-send-note" role="status">
@@ -717,7 +629,8 @@ export default function SwapEngine({ user }) {
                   {minimumStatus === 'error' && 'The current minimum is unavailable. ChangeNOW will check it when you request a quote. '}
                   Enter the amount you plan to send to ChangeNOW. The estimated receive amount appears after you request a quote.
                 </p>
-                <label className="field-wide">{form.fundingMethod === 'venmo' ? 'Trust Wallet receiving address' : 'PayPal crypto receiving address'}<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder={form.fundingMethod === 'venmo' ? 'Paste your Trust Wallet address' : 'Paste the crypto address shown in PayPal'} required /></label>
+                <label className="field-wide">Destination wallet or app (optional)<input name="destinationName" value={form.destinationName} onChange={updateForm} placeholder="For your reference" maxLength="48" /></label>
+                <label className="field-wide">Destination address<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder="Address on the selected receive network" required /></label>
                 {selectedToCurrency?.hasExternalId && <label className="field-wide">Destination memo or tag<input name="destinationExtraId" value={form.destinationExtraId} onChange={updateForm} autoComplete="off" placeholder="Required by this asset" required /></label>}
                 <div className="address-tools field-wide">
                   <select aria-label="Load a saved destination address" value="" onChange={(event) => loadAddress('destination', event.target.value)}>
@@ -736,7 +649,7 @@ export default function SwapEngine({ user }) {
                   </select>
                   <button className="button button-quiet" onClick={() => beginSaveAddress('refund')} type="button">Save refund address</button>
                 </div>
-                <p className="field-note field-wide">{form.fundingMethod === 'venmo' ? 'Venmo supports only certain coins and networks. Confirm that your account can send the selected asset.' : 'Confirm that Trust Wallet supports the selected asset and network. Supported native EVM coins can be sent with wallet approval; other assets require a manual deposit after tunnel creation.'} ChangeNOW checks the selected pair before you confirm.</p>
+                <p className="field-note field-wide">Use a wallet that can send the selected asset on the selected network. Only pairs supported by ChangeNOW can be quoted; verify the live quote before creating a deposit tunnel.</p>
                 <div className="form-actions field-wide"><button className="button button-quiet" disabled={busy} onClick={cancelPresetForm} type="button">Cancel</button><button className="button button-primary" disabled={busy || currenciesLoading || !selectedFromCurrency?.canSell || !selectedToCurrency?.canBuy} type="submit">{busy ? 'Saving…' : editingPresetId ? 'Save changes' : 'Save preset'}</button></div>
               </form>
             </section>
@@ -749,9 +662,9 @@ export default function SwapEngine({ user }) {
           {selectedPreset && !showNewPreset && (
             <>
               <section className="route-summary">
-                <div className="summary-origin"><span className="summary-label">FROM</span><strong>{selectedPreset.fundingMethod === 'venmo' ? 'Venmo' : 'Trust Wallet'}</strong><small>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} · {selectedPreset.fromNetwork?.toUpperCase()}</small></div>
+                <div className="summary-origin"><span className="summary-label">FROM</span><strong>{getSourceWalletName(selectedPreset)}</strong><small>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} · {selectedPreset.fromNetwork?.toUpperCase()}</small></div>
                 <div className="summary-connector"><span>ChangeNOW</span><div><i /><i /><i /><i /><i /></div></div>
-                <div className="summary-destination"><span className="summary-label">TO</span><strong>{selectedPreset.fundingMethod === 'venmo' ? 'Trust Wallet' : 'PayPal'}</strong><small>{selectedPreset.toCurrency?.toUpperCase()} · {selectedPreset.toNetwork?.toUpperCase()}</small></div>
+                <div className="summary-destination"><span className="summary-label">TO</span><strong>{getDestinationWalletName(selectedPreset)}</strong><small>{selectedPreset.toCurrency?.toUpperCase()} · {selectedPreset.toNetwork?.toUpperCase()}</small></div>
               </section>
               <section className="panel active-route-panel">
                 <div className="panel-heading"><div><p className="eyebrow">ACTIVE PRESET</p><h2>{selectedPreset.name}</h2></div><span className="panel-index">01 / ROUTE</span></div>
@@ -771,7 +684,7 @@ export default function SwapEngine({ user }) {
           {tunnel && (
             <section className="panel tunnel-panel">
               <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap tunnel ready</h2></div><span className="live-badge">LIVE</span></div>
-              <p className="field-note">Send only {(tunnelPreset ?? selectedPreset)?.fromCurrency?.toUpperCase()} on {(tunnelPreset ?? selectedPreset)?.fromNetwork?.toUpperCase()}. Sending another asset or network can permanently lose funds.</p>
+              <p className="field-note">Send only {(tunnelPreset ?? selectedPreset)?.fromCurrency?.toUpperCase()} on {(tunnelPreset ?? selectedPreset)?.fromNetwork?.toUpperCase()} from {getSourceWalletName(tunnelPreset ?? selectedPreset)}. Sending another asset or network can permanently lose funds.</p>
               <div className="deposit-address"><span>Deposit address</span><code>{tunnel.payinAddress}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinAddress)} type="button">Copy address</button></div>
               {tunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{tunnel.payinExtraId}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinExtraId)} type="button">Copy memo or tag</button></div>}
               {tunnel.transactionHash && <div className="transaction-hash"><span>Wallet transaction</span><code>{tunnel.transactionHash}</code></div>}
@@ -822,7 +735,7 @@ export default function SwapEngine({ user }) {
               <div><dt>Estimated receive</dt><dd>{quote.estimatedAmount} {selectedPreset.toCurrency?.toUpperCase()}</dd></div>
               {estimatedRate && <div><dt>Estimated rate</dt><dd><code>{estimatedRate}</code><br />Based on this quote and send amount; not a fixed rate.</dd></div>}
               <div><dt>Minimum send</dt><dd>{quote.minimumAmount} {selectedPreset.fromCurrency?.toUpperCase()}</dd></div>
-              <div><dt>Destination</dt><dd>{selectedPreset.fundingMethod === 'venmo' ? 'Trust Wallet' : 'PayPal'}<br /><code>{selectedPreset.destinationAddress}</code></dd></div>
+              <div><dt>Destination</dt><dd>{getDestinationWalletName(selectedPreset)}<br /><code>{selectedPreset.destinationAddress}</code></dd></div>
               {selectedPreset.destinationExtraId && <div><dt>Memo or tag</dt><dd><code>{selectedPreset.destinationExtraId}</code></dd></div>}
               {selectedPreset.refundAddress && <div><dt>Refund address</dt><dd><code>{selectedPreset.refundAddress}</code></dd></div>}
               {selectedPreset.refundExtraId && <div><dt>Refund memo or tag</dt><dd><code>{selectedPreset.refundExtraId}</code></dd></div>}
