@@ -183,7 +183,7 @@ function buildQuery(exchange, includeAmount = false) {
 }
 
 exports.getSwapCurrencies = onCall(
-  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10 },
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
     if (cachedCurrencies && Date.now() < cachedCurrenciesUntil) {
@@ -203,7 +203,7 @@ exports.getSwapCurrencies = onCall(
 )
 
 exports.getSwapQuote = onCall(
-  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10 },
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
     const exchange = validateExchangeRequest(request.data)
@@ -253,7 +253,7 @@ exports.getSwapQuote = onCall(
 )
 
 exports.createSwapTunnel = onCall(
-  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10 },
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
     const exchange = validateExchangeRequest(request.data)
