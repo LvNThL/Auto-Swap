@@ -6,6 +6,8 @@ const EXCHANGE_FIELDS = [
   'fromAmount',
   'toAddress',
   'toExtraId',
+  'refundAddress',
+  'refundExtraId',
 ]
 
 function quoteMatchesExchange(quote, exchange) {

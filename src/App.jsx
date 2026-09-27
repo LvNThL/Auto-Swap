@@ -24,6 +24,6 @@ export default function App() {
   if (!authReady) return <main className="loading-screen">Loading secure workspace…</main>
   if (user && !user.emailVerified) return <Auth verificationUser={user} />
   return user
-    ? <Suspense fallback={<main className="loading-screen">Loading secure workspace…</main>}><SwapEngine user={user} /></Suspense>
+    ? <Suspense fallback={<main className="loading-screen">Loading secure workspace…</main>}><SwapEngine key={user.uid} user={user} /></Suspense>
     : <Auth />
 }

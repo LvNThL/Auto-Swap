@@ -5,5 +5,10 @@ service cloud.firestore {
       allow read, create, update, delete: if request.auth != null
         && request.auth.uid == userId;
     }
+
+    match /users/{userId}/addressBook/{entryId} {
+      allow read, create, update, delete: if request.auth != null
+        && request.auth.uid == userId;
+    }
   }
 }

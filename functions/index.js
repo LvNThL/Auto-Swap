@@ -83,12 +83,18 @@ function validateExchangeRequest(data = {}) {
   const fromAmount = requiredString(data.fromAmount, 'fromAmount', 48)
   const toAddress = data.toAddress == null ? undefined : requiredString(data.toAddress, 'toAddress', 256)
   const toExtraId = data.toExtraId == null ? '' : requiredString(data.toExtraId, 'toExtraId', 256)
+  const refundAddress = data.refundAddress == null || data.refundAddress === ''
+    ? ''
+    : requiredString(data.refundAddress, 'refundAddress', 256)
+  const refundExtraId = data.refundExtraId == null || data.refundExtraId === ''
+    ? ''
+    : requiredString(data.refundExtraId, 'refundExtraId', 256)
 
   if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(fromAmount) || !Number.isFinite(Number(fromAmount)) || Number(fromAmount) <= 0) {
     throw new HttpsError('invalid-argument', 'Amount must be a positive decimal value.')
   }
 
-  return { fromCurrency, fromNetwork, toCurrency, toNetwork, fromAmount, toAddress, toExtraId }
+  return { fromCurrency, fromNetwork, toCurrency, toNetwork, fromAmount, toAddress, toExtraId, refundAddress, refundExtraId }
 }
 
 function compareDecimalStrings(left, right) {
@@ -265,6 +271,8 @@ exports.createSwapTunnel = onCall(
         fromAmount: exchange.fromAmount,
         toAddress,
         ...(exchange.toExtraId ? { toExtraId: exchange.toExtraId } : {}),
+        ...(exchange.refundAddress ? { refundAddress: exchange.refundAddress } : {}),
+        ...(exchange.refundExtraId ? { refundExtraId: exchange.refundExtraId } : {}),
         flow: 'standard',
         type: 'direct',
       },

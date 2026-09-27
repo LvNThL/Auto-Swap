@@ -3,6 +3,11 @@ import { httpsCallable } from 'firebase/functions'
 import { signOut } from 'firebase/auth'
 import Select from 'react-select'
 import { auth, functions, isFirebaseConfigured } from '../firebase.js'
+import {
+  createAddressBookEntry,
+  deleteAddressBookEntry,
+  listAddressBookEntries,
+} from '../services/AddressBookManager.js'
 import { createPreset, deletePreset, listPresets } from '../services/PresetManager.js'
 
 const emptyPreset = {
@@ -16,6 +21,8 @@ const emptyPreset = {
   destinationName: 'Trust Wallet',
   destinationAddress: '',
   destinationExtraId: '',
+  refundAddress: '',
+  refundExtraId: '',
 }
 
 const nativeEvmRoutes = {
@@ -100,6 +107,11 @@ export default function SwapEngine({ user }) {
   const [currenciesLoading, setCurrenciesLoading] = useState(true)
   const [currencyError, setCurrencyError] = useState('')
   const [currencyReloadKey, setCurrencyReloadKey] = useState(0)
+  const [addressBookEntries, setAddressBookEntries] = useState([])
+  const [addressBookDialog, setAddressBookDialog] = useState('')
+  const [addressDraft, setAddressDraft] = useState({ label: '', address: '', extraId: '', ticker: '', network: '', purpose: '' })
+  const [addressBookBusy, setAddressBookBusy] = useState(false)
+  const [addressBookError, setAddressBookError] = useState('')
   const [fromSearch, setFromSearch] = useState('')
   const [toSearch, setToSearch] = useState('')
   const [selectedId, setSelectedId] = useState('')
@@ -125,6 +137,11 @@ export default function SwapEngine({ user }) {
     currency.ticker === form.fromCurrency && currency.network === form.fromNetwork)
   const selectedToCurrency = currencies.find((currency) =>
     currency.ticker === form.toCurrency && currency.network === form.toNetwork)
+  const destinationAddressEntries = addressBookEntries.filter((entry) =>
+    entry.purpose === 'destination' && entry.ticker === selectedToCurrency?.ticker && entry.network === selectedToCurrency?.network)
+  const refundAddressEntries = addressBookEntries.filter((entry) =>
+    entry.purpose === 'refund' && entry.ticker === selectedFromCurrency?.ticker && entry.network === selectedFromCurrency?.network)
+
   async function refreshPresets() {
     const saved = await listPresets(user.uid)
     setPresets(saved)
@@ -135,7 +152,11 @@ export default function SwapEngine({ user }) {
     let active = true
     setCurrenciesLoading(true)
     setCurrencyError('')
+    setAddressBookError('')
     refreshPresets().catch(() => setError('Saved routes could not be loaded. Check your Firebase setup.'))
+    listAddressBookEntries(user.uid)
+      .then((entries) => { if (active) setAddressBookEntries(entries) })
+      .catch(() => { if (active) setAddressBookError('Saved addresses could not be loaded.') })
 
     const getCurrencies = httpsCallable(functions, 'getSwapCurrencies')
     getCurrencies({})
@@ -177,7 +198,13 @@ export default function SwapEngine({ user }) {
         fundingMethod: value,
         destinationName: value === 'venmo' ? 'Trust Wallet' : 'Venmo',
         ...(value === 'trust-wallet' && walletCurrency
-          ? { fromCurrency: walletCurrency.ticker, fromNetwork: walletCurrency.network }
+          ? {
+            fromCurrency: walletCurrency.ticker,
+            fromNetwork: walletCurrency.network,
+            ...(current.fromCurrency !== walletCurrency.ticker || current.fromNetwork !== walletCurrency.network
+              ? { refundExtraId: '' }
+              : {}),
+          }
           : {}),
       }))
       return
@@ -198,9 +225,68 @@ export default function SwapEngine({ user }) {
       [`${side}Currency`]: currency.ticker,
       [`${side}Network`]: currency.network,
       ...(side === 'to' ? { destinationExtraId: '' } : {}),
+      ...(side === 'from' ? { refundExtraId: '' } : {}),
     }))
     if (side === 'from') setFromSearch('')
     if (side === 'to') setToSearch('')
+  }
+
+  function loadAddress(target, entryId) {
+    const entry = addressBookEntries.find((savedEntry) => savedEntry.id === entryId)
+    if (!entry) return
+    setForm((current) => ({
+      ...current,
+      ...(target === 'destination'
+        ? { destinationAddress: entry.address, destinationExtraId: entry.extraId ?? '' }
+        : { refundAddress: entry.address, refundExtraId: entry.extraId ?? '' }),
+    }))
+  }
+
+  function beginSaveAddress(purpose) {
+    const currency = purpose === 'destination' ? selectedToCurrency : selectedFromCurrency
+    const address = purpose === 'destination' ? form.destinationAddress : form.refundAddress
+    const extraId = purpose === 'destination' ? form.destinationExtraId : form.refundExtraId
+    if (!currency || !address.trim()) {
+      setError('Enter an address before saving it to your address book.')
+      return
+    }
+    setAddressDraft({ label: '', address: address.trim(), extraId: extraId.trim(), ticker: currency.ticker, network: currency.network, purpose })
+    setAddressBookError('')
+    setAddressBookDialog('save')
+  }
+
+  async function saveAddress(event) {
+    event.preventDefault()
+    setAddressBookBusy(true)
+    setAddressBookError('')
+    try {
+      await createAddressBookEntry(user.uid, {
+        ...addressDraft,
+        label: addressDraft.label.trim(),
+        address: addressDraft.address.trim(),
+        extraId: addressDraft.extraId.trim(),
+      })
+      setAddressBookEntries(await listAddressBookEntries(user.uid))
+      setAddressBookDialog('')
+    } catch {
+      setAddressBookError('Address could not be saved. Check your connection and Firestore rules.')
+    } finally {
+      setAddressBookBusy(false)
+    }
+  }
+
+  async function removeAddress(entry) {
+    if (!window.confirm(`Remove “${entry.label}” from your address book?`)) return
+    setAddressBookBusy(true)
+    setAddressBookError('')
+    try {
+      await deleteAddressBookEntry(user.uid, entry.id)
+      setAddressBookEntries((entries) => entries.filter((savedEntry) => savedEntry.id !== entry.id))
+    } catch {
+      setAddressBookError('Address could not be removed. Check your connection and try again.')
+    } finally {
+      setAddressBookBusy(false)
+    }
   }
 
   async function savePreset(event) {
@@ -218,6 +304,8 @@ export default function SwapEngine({ user }) {
         destinationAddress: form.destinationAddress.trim(),
         fromAmount: form.fromAmount.trim(),
         destinationExtraId: form.destinationExtraId.trim(),
+        refundAddress: form.refundAddress.trim(),
+        refundExtraId: form.refundExtraId.trim(),
         chainId: form.fundingMethod === 'trust-wallet'
           ? nativeEvmRoutes[form.fromNetwork]?.chainId ?? null
           : null,
@@ -283,6 +371,8 @@ export default function SwapEngine({ user }) {
       fromAmount: preset.fromAmount,
       toAddress: preset.destinationAddress,
       toExtraId: preset.destinationExtraId,
+      refundAddress: preset.refundAddress,
+      refundExtraId: preset.refundExtraId,
       quoteId,
     })
     return result.data
@@ -317,6 +407,8 @@ export default function SwapEngine({ user }) {
         fromAmount: selectedPreset.fromAmount,
         toAddress: selectedPreset.destinationAddress,
         toExtraId: selectedPreset.destinationExtraId,
+        refundAddress: selectedPreset.refundAddress,
+        refundExtraId: selectedPreset.refundExtraId,
       })
       setQuote(result.data)
       setConfirming(true)
@@ -438,6 +530,7 @@ export default function SwapEngine({ user }) {
 
           {!isFirebaseConfigured && <div className="notice notice-warning">Firebase is not configured. Add the VITE_FIREBASE_* values before signing in or saving routes.</div>}
           {error && <div className="notice notice-error" role="alert">{error}</div>}
+          {addressBookError && <div className="notice notice-error" role="alert">{addressBookError}</div>}
 
           {showNewPreset && (
             <section className="panel new-route-panel">
@@ -517,6 +610,23 @@ export default function SwapEngine({ user }) {
                 <label>Amount<input name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
                 <label className="field-wide">{form.fundingMethod === 'venmo' ? 'Trust Wallet receiving address' : 'Venmo crypto receiving address'}<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder={form.fundingMethod === 'venmo' ? 'Paste your Trust Wallet address' : 'Paste the crypto address shown in Venmo'} required /></label>
                 {selectedToCurrency?.hasExternalId && <label className="field-wide">Destination memo or tag<input name="destinationExtraId" value={form.destinationExtraId} onChange={updateForm} autoComplete="off" placeholder="Required by this asset" required /></label>}
+                <div className="address-tools field-wide">
+                  <select aria-label="Load saved destination address" value="" onChange={(event) => loadAddress('destination', event.target.value)}>
+                    <option value="">Load saved destination address…</option>
+                    {destinationAddressEntries.map((entry) => <option value={entry.id} key={entry.id}>{entry.label}</option>)}
+                  </select>
+                  <button className="button button-quiet" onClick={() => beginSaveAddress('destination')} type="button">Save destination</button>
+                  <button className="button button-quiet" onClick={() => setAddressBookDialog('manage')} type="button">Manage address book</button>
+                </div>
+                <label className="field-wide">Refund address <span className="optional-label">Optional · used if the exchange refunds this swap</span><input name="refundAddress" value={form.refundAddress} onChange={updateForm} autoComplete="off" placeholder="Crypto address on the send network" /></label>
+                {selectedFromCurrency?.hasExternalId && <label className="field-wide">Refund memo or tag<input name="refundExtraId" value={form.refundExtraId} onChange={updateForm} autoComplete="off" placeholder="Optional refund memo or tag" /></label>}
+                <div className="address-tools field-wide">
+                  <select aria-label="Load saved refund address" value="" onChange={(event) => loadAddress('refund', event.target.value)}>
+                    <option value="">Load saved refund address…</option>
+                    {refundAddressEntries.map((entry) => <option value={entry.id} key={entry.id}>{entry.label}</option>)}
+                  </select>
+                  <button className="button button-quiet" onClick={() => beginSaveAddress('refund')} type="button">Save refund address</button>
+                </div>
                 <p className="field-note field-wide">Venmo supports only certain coins and networks; make sure your Venmo account can send the selected asset. Wallet automation is limited to supported native EVM coins. The quoted pair is checked with ChangeNOW before you confirm.</p>
                 <div className="form-actions field-wide"><button className="button button-quiet" onClick={() => setShowNewPreset(false)} type="button">Cancel</button><button className="button button-primary" disabled={currenciesLoading || !selectedFromCurrency?.canSell || !selectedToCurrency?.canBuy} type="submit">Save preset</button></div>
               </form>
@@ -562,6 +672,35 @@ export default function SwapEngine({ user }) {
         </section>
       </main>
 
+      {addressBookDialog && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddressBookDialog('') }}>
+          <section className="confirm-modal address-book-modal" role="dialog" aria-modal="true" aria-labelledby="address-book-title">
+            <p className="eyebrow">PRIVATE TO YOUR ACCOUNT</p>
+            <h2 id="address-book-title">{addressBookDialog === 'save' ? 'Save address' : 'Address book'}</h2>
+            {addressBookDialog === 'save' ? (
+              <form className="address-save-form" onSubmit={saveAddress}>
+                <p className="muted">{addressDraft.ticker.toUpperCase()} on {addressDraft.network.toUpperCase()} · {addressDraft.purpose === 'destination' ? 'destination' : 'refund'} address</p>
+                <label>Address label<input autoFocus maxLength="48" onChange={(event) => setAddressDraft((draft) => ({ ...draft, label: event.target.value }))} placeholder="For example, Main wallet" required value={addressDraft.label} /></label>
+                <div className="address-preview"><code>{addressDraft.address}</code>{addressDraft.extraId && <small>Memo/tag: {addressDraft.extraId}</small>}</div>
+                <div className="form-actions"><button className="button button-quiet" onClick={() => setAddressBookDialog('')} type="button">Cancel</button><button className="button button-primary" disabled={addressBookBusy} type="submit">{addressBookBusy ? 'Saving…' : 'Save address'}</button></div>
+              </form>
+            ) : (
+              <>
+                {addressBookEntries.length === 0
+                  ? <p className="muted">No saved addresses yet.</p>
+                  : <ul className="address-book-list">{addressBookEntries.map((entry) => (
+                    <li className="address-book-item" key={entry.id}>
+                      <div><strong>{entry.label}</strong><span>{entry.ticker.toUpperCase()} · {entry.network.toUpperCase()} · {entry.purpose}</span><code>{entry.address}</code>{entry.extraId && <small>Memo/tag: {entry.extraId}</small>}</div>
+                      <button className="button button-quiet" disabled={addressBookBusy} onClick={() => removeAddress(entry)} type="button">Remove</button>
+                    </li>
+                  ))}</ul>}
+                <div className="form-actions"><button className="button button-quiet" onClick={() => setAddressBookDialog('')} type="button">Close</button></div>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+
       {confirming && selectedPreset && quote?.quoteId && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setConfirming(false) }}>
           <section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
@@ -575,6 +714,8 @@ export default function SwapEngine({ user }) {
               <div><dt>Minimum send</dt><dd>{quote.minimumAmount} {selectedPreset.fromCurrency?.toUpperCase()}</dd></div>
               <div><dt>Destination</dt><dd>{selectedPreset.fundingMethod === 'venmo' ? 'Trust Wallet' : 'Venmo'}<br /><code>{selectedPreset.destinationAddress}</code></dd></div>
               {selectedPreset.destinationExtraId && <div><dt>Memo or tag</dt><dd><code>{selectedPreset.destinationExtraId}</code></dd></div>}
+              {selectedPreset.refundAddress && <div><dt>Refund address</dt><dd><code>{selectedPreset.refundAddress}</code></dd></div>}
+              {selectedPreset.refundExtraId && <div><dt>Refund memo or tag</dt><dd><code>{selectedPreset.refundExtraId}</code></dd></div>}
             </dl>
             {quote.warningMessage && <p className="modal-warning">{quote.warningMessage}</p>}
             <p className="modal-warning">This standard-flow estimate is indicative and may change. Confirming creates the exchange; your wallet will separately ask approval before sending any funds.</p>
