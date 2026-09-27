@@ -12,7 +12,10 @@ function normalizeCurrencyCatalog(payload) {
 
     const ticker = record.ticker.trim().toLowerCase()
     const network = record.network.trim().toLowerCase()
+    const canBuy = record.buy === true
+    const canSell = record.sell === true
     if (!ticker || !network) continue
+    if (!canBuy && !canSell) continue
 
     const id = `${ticker}:${network}`
     if (currenciesById.has(id)) continue
@@ -22,6 +25,8 @@ function normalizeCurrencyCatalog(payload) {
       ticker,
       network,
       name: record.name.trim(),
+      canBuy,
+      canSell,
       image: typeof record.image === 'string' ? record.image : '',
       featured: record.featured === true,
       tokenContract: typeof record.tokenContract === 'string' ? record.tokenContract : null,

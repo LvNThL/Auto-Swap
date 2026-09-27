@@ -36,6 +36,22 @@ function currencyGroups(currencies) {
   ]
 }
 
+function searchCurrencies(currencies, query) {
+  const normalizedQuery = query.trim().toLowerCase()
+  if (!normalizedQuery) {
+    const featured = currencies.filter((currency) => currency.featured)
+    return featured.length ? featured : currencies.slice(0, 20)
+  }
+
+  return currencies.filter((currency) =>
+    `${currency.name} ${currency.ticker} ${currency.network}`.toLowerCase().includes(normalizedQuery))
+}
+
+function preserveSelectedCurrency(options, selectedCurrency) {
+  if (!selectedCurrency || options.some((currency) => currency.id === selectedCurrency.id)) return options
+  return [selectedCurrency, ...options]
+}
+
 function isWalletNativeCurrency(currency) {
   return Boolean(
     currency &&
@@ -55,6 +71,9 @@ export default function SwapEngine({ user }) {
   const [currencies, setCurrencies] = useState([])
   const [currenciesLoading, setCurrenciesLoading] = useState(true)
   const [currencyError, setCurrencyError] = useState('')
+  const [currencyReloadKey, setCurrencyReloadKey] = useState(0)
+  const [fromSearch, setFromSearch] = useState('')
+  const [toSearch, setToSearch] = useState('')
   const [selectedId, setSelectedId] = useState('')
   const [form, setForm] = useState(emptyPreset)
   const [showNewPreset, setShowNewPreset] = useState(false)
@@ -67,12 +86,19 @@ export default function SwapEngine({ user }) {
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
   const fromCurrencies = form.fundingMethod === 'trust-wallet'
-    ? currencies.filter(isWalletNativeCurrency)
-    : currencies
+    ? currencies.filter((currency) => currency.canSell && isWalletNativeCurrency(currency))
+    : currencies.filter((currency) => currency.canSell)
+  const toCurrencies = currencies.filter((currency) => currency.canBuy)
+  const fromSearchLower = fromSearch.trim().toLowerCase()
+  const toSearchLower = toSearch.trim().toLowerCase()
+  const matchingFromCurrencies = searchCurrencies(fromCurrencies, fromSearchLower)
+  const matchingToCurrencies = searchCurrencies(toCurrencies, toSearchLower)
   const selectedFromCurrency = currencies.find((currency) =>
     currency.ticker === form.fromCurrency && currency.network === form.fromNetwork)
   const selectedToCurrency = currencies.find((currency) =>
     currency.ticker === form.toCurrency && currency.network === form.toNetwork)
+  const visibleFromCurrencies = preserveSelectedCurrency(matchingFromCurrencies, selectedFromCurrency)
+  const visibleToCurrencies = preserveSelectedCurrency(matchingToCurrencies, selectedToCurrency)
 
   async function refreshPresets() {
     const saved = await listPresets(user.uid)
@@ -82,6 +108,8 @@ export default function SwapEngine({ user }) {
 
   useEffect(() => {
     let active = true
+    setCurrenciesLoading(true)
+    setCurrencyError('')
     refreshPresets().catch(() => setError('Saved routes could not be loaded. Check your Firebase setup.'))
 
     const getCurrencies = httpsCallable(functions, 'getSwapCurrencies')
@@ -113,7 +141,7 @@ export default function SwapEngine({ user }) {
       })
 
     return () => { active = false }
-  }, [user.uid])
+  }, [user.uid, currencyReloadKey])
 
   function updateForm(event) {
     const { name, value } = event.target
@@ -147,6 +175,8 @@ export default function SwapEngine({ user }) {
       [`${side}Network`]: currency.network,
       ...(side === 'to' ? { destinationExtraId: '' } : {}),
     }))
+    if (side === 'from') setFromSearch('')
+    if (side === 'to') setToSearch('')
   }
 
   async function savePreset(event) {
@@ -387,7 +417,8 @@ export default function SwapEngine({ user }) {
                 <label>Route name<input name="name" value={form.name} onChange={updateForm} placeholder="My ETH route" maxLength="48" required /></label>
                 <label>Funding source<select name="fundingMethod" value={form.fundingMethod} onChange={updateForm}><option value="venmo">Venmo manual deposit</option><option value="trust-wallet">Trust Wallet transfer</option></select></label>
                 {currenciesLoading && <p className="field-note field-wide" role="status">Loading ChangeNOW assets…</p>}
-                {currencyError && <p className="notice notice-error field-wide" role="alert">{currencyError}</p>}
+                  {currencyError && <div className="notice notice-error field-wide" role="alert">{currencyError}<button className="button button-quiet" onClick={() => setCurrencyReloadKey((key) => key + 1)} type="button">Retry asset list</button></div>}
+                  <label>Find send asset<input type="search" value={fromSearch} onChange={(event) => setFromSearch(event.target.value)} placeholder="Search name, ticker, or network" /></label>
                 <label>Send asset and network
                   <select
                     value={selectedFromCurrency?.id ?? ''}
@@ -396,7 +427,7 @@ export default function SwapEngine({ user }) {
                     required
                   >
                     <option value="" disabled>Select a crypto asset</option>
-                    {currencyGroups(fromCurrencies).map((group) => (
+                    {currencyGroups(visibleFromCurrencies).map((group) => (
                       <optgroup key={group.label} label={group.label}>
                         {group.currencies.map((currency) => (
                           <option key={currency.id} value={currency.id}>
@@ -407,15 +438,17 @@ export default function SwapEngine({ user }) {
                     ))}
                   </select>
                 </label>
+                <p className="field-note field-wide" role="status">{fromSearchLower ? `${matchingFromCurrencies.length} send assets match.` : `Showing popular send assets. Search ${fromCurrencies.length} available options.`}</p>
+                <label>Find receive asset<input type="search" value={toSearch} onChange={(event) => setToSearch(event.target.value)} placeholder="Search name, ticker, or network" /></label>
                 <label>Receive asset and network
                   <select
                     value={selectedToCurrency?.id ?? ''}
                     onChange={(event) => updateSelectedCurrency('to', event)}
-                    disabled={currenciesLoading || currencies.length === 0}
+                    disabled={currenciesLoading || toCurrencies.length === 0}
                     required
                   >
                     <option value="" disabled>Select a crypto asset</option>
-                    {currencyGroups(currencies).map((group) => (
+                    {currencyGroups(visibleToCurrencies).map((group) => (
                       <optgroup key={group.label} label={group.label}>
                         {group.currencies.map((currency) => (
                           <option key={currency.id} value={currency.id}>
@@ -426,12 +459,13 @@ export default function SwapEngine({ user }) {
                     ))}
                   </select>
                 </label>
+                <p className="field-note field-wide" role="status">{toSearchLower ? `${matchingToCurrencies.length} receive assets match.` : `Showing popular receive assets. Search ${toCurrencies.length} available options.`}</p>
                 <label>Amount<input name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
                 <label className="field-wide">Destination name<input name="destinationName" value={form.destinationName} onChange={updateForm} placeholder="Trust Wallet / PayPal" required /></label>
                 <label className="field-wide">Destination crypto address<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder="Wallet address supplied by the destination" required /></label>
                 {selectedToCurrency?.hasExternalId && <label className="field-wide">Destination memo or tag<input name="destinationExtraId" value={form.destinationExtraId} onChange={updateForm} autoComplete="off" placeholder="Required by this asset" required /></label>}
                 <p className="field-note field-wide">Assets and networks come from ChangeNOW’s active standard-flow catalog. The selected pair is checked for availability when you request a quote. Destination must be a crypto address, not a PayPal email. Wallet automation is limited to supported native EVM coins.</p>
-                <div className="form-actions field-wide"><button className="button button-quiet" onClick={() => setShowNewPreset(false)} type="button">Cancel</button><button className="button button-primary" disabled={currenciesLoading || currencies.length === 0} type="submit">Save route</button></div>
+                <div className="form-actions field-wide"><button className="button button-quiet" onClick={() => setShowNewPreset(false)} type="button">Cancel</button><button className="button button-primary" disabled={currenciesLoading || !selectedFromCurrency?.canSell || !selectedToCurrency?.canBuy} type="submit">Save route</button></div>
               </form>
             </section>
           )}

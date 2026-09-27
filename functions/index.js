@@ -109,20 +109,35 @@ function compareDecimalStrings(left, right) {
   return paddedLeft > paddedRight ? 1 : -1
 }
 
+function getChangeNowApiKey() {
+  const apiKey = changeNowApiKey.value()?.trim()
+  if (!apiKey || !/^[\x21-\x7E]+$/.test(apiKey)) {
+    throw new HttpsError('failed-precondition', 'ChangeNOW API key is malformed. Re-enter the key without spaces or line breaks.')
+  }
+  return apiKey
+}
+
 async function callChangeNow(path, { method = 'GET', body } = {}) {
+  const apiKey = getChangeNowApiKey()
   let response
   try {
     response = await fetch(`${CHANGE_NOW_URL}${path}`, {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'x-changenow-api-key': changeNowApiKey.value(),
+        'x-changenow-api-key': apiKey,
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(20000),
     })
   } catch (error) {
-    console.error('ChangeNOW request failed:', error.name)
+    console.error('ChangeNOW request failed:', JSON.stringify({
+      name: error.name,
+      code: error.code ?? error.cause?.code ?? null,
+      causeName: error.cause?.name ?? null,
+      causeCode: error.cause?.code ?? null,
+      causeMessage: error.cause?.message ?? null,
+    }))
     throw new HttpsError('unavailable', 'The exchange service is temporarily unavailable.')
   }
 
