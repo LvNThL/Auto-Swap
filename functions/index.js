@@ -157,8 +157,20 @@ async function callChangeNow(path, { method = 'GET', body } = {}) {
   }
 
   if (!response.ok) {
-    console.warn('ChangeNOW rejected a request:', response.status)
-    throw new HttpsError('failed-precondition', 'ChangeNOW rejected this request. Verify the currencies, network, amount, and destination.')
+    const providerMessage = [result.message, result.errorMessage, result.error?.message, result.error]
+      .find((value) => typeof value === 'string')
+      ?.replace(/0x[a-f\d]{40}/gi, '[address]')
+      .replace(/\bf1[a-z\d]{30,}\b/gi, '[address]')
+      .replace(/\b[a-f\d]{64,}\b/gi, '[redacted]')
+      .replace(/[\r\n\t]+/g, ' ')
+      .slice(0, 180)
+    console.warn('ChangeNOW rejected a request:', JSON.stringify({ status: response.status, message: providerMessage ?? null }))
+    throw new HttpsError(
+      'failed-precondition',
+      providerMessage
+        ? `ChangeNOW rejected this request: ${providerMessage}`
+        : 'ChangeNOW rejected this request. Verify the currencies, network, amount, and destination.',
+    )
   }
 
   return result
@@ -292,8 +304,8 @@ exports.createSwapTunnel = onCall(
         toCurrency: exchange.toCurrency,
         toNetwork: exchange.toNetwork,
         fromAmount: exchange.fromAmount,
-        toAddress,
-        ...(exchange.toExtraId ? { toExtraId: exchange.toExtraId } : {}),
+        address: toAddress,
+        ...(exchange.toExtraId ? { extraId: exchange.toExtraId } : {}),
         ...(exchange.refundAddress ? { refundAddress: exchange.refundAddress } : {}),
         ...(exchange.refundExtraId ? { refundExtraId: exchange.refundExtraId } : {}),
         flow: 'standard',
