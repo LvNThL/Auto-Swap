@@ -158,7 +158,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .notice-success { border-color: var(--success-line); background: var(--success-bg); color: var(--success-ink); }
 .tunnel-panel { margin-top: 18px; padding: 23px 25px; }
 .single-use-warning { margin-top: 17px; }
-.live-badge { padding: 5px 8px; border-radius: 4px; color: var(--finished-ink); background: var(--finished-bg); font-family: 'IBM Plex Mono', monospace; font-size: 8px; }
+.live-badge { padding: 5px 8px; border-radius: 4px; color: var(--finished-ink); background: var(--finished-bg); font-family: 'IBM Plex Mono', monospace; font-size: 8px; white-space: nowrap; }
 .field-note { margin: 17px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .deposit-address { display: grid; gap: 9px; margin-top: 18px; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--input-bg); }
 .deposit-address code, .transaction-hash code { overflow-wrap: anywhere; color: var(--code-ink); font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
@@ -174,6 +174,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .history-main strong { font-size: 12px; }
 .history-main strong span { color: var(--muted); font-weight: 400; }
 .history-main small { overflow-wrap: anywhere; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.history-main code { color: var(--code-ink); font-family: 'IBM Plex Mono', monospace; font-size: 9px; }
 .history-status-controls { display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
 .history-status { padding: 5px 8px; border-radius: 4px; background: var(--neutral-status-bg); color: var(--neutral-status-ink); font-family: 'IBM Plex Mono', monospace; font-size: 9px; white-space: nowrap; }
 .history-status-pending { background: var(--pending-bg); color: var(--pending-ink); }

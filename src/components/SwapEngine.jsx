@@ -27,6 +27,8 @@ const emptyPreset = {
   refundExtraId: '',
 }
 
+const TUNNEL_ACCESS_TTL_MS = 5 * 60 * 1000
+
 function currencyGroups(currencies) {
   const featured = currencies.filter((currency) => currency.featured)
   const other = currencies.filter((currency) => !currency.featured)
@@ -124,6 +126,13 @@ function formatSwapStatus(status) {
   return String(status || 'unknown').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
+function formatTunnelTimeRemaining(expiresAt, now) {
+  const totalSeconds = Math.max(0, Math.ceil((expiresAt - now) / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
 const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
 const depositReceivedStatuses = new Set(['confirming', 'exchanging', 'sending', 'finished', 'failed', 'refunded'])
 
@@ -150,6 +159,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [busy, setBusy] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [notice, setNotice] = useState('')
+  const [tunnelNotice, setTunnelNotice] = useState('')
   const [error, setError] = useState('')
   const [quote, setQuote] = useState(null)
   const [tunnel, setTunnel] = useState(null)
@@ -158,8 +168,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [pendingSwaps, setPendingSwaps] = useState([])
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
-  const [refreshingSwapId, setRefreshingSwapId] = useState('')
   const [copyToast, setCopyToast] = useState(null)
+  const [clockNow, setClockNow] = useState(() => Date.now())
   const settingsMenuRef = useRef(null)
   const settingsButtonRef = useRef(null)
 
@@ -168,7 +178,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     .filter((swap) => swap.presetId === selectedId && swap.payinAddress)
     .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))[0]
   const localTunnelSelected = tunnel?.presetId === selectedId
-  const activeTunnel = localTunnelSelected
+  const tunnelCandidate = localTunnelSelected
     ? tunnel
     : persistedTunnel
       ? {
@@ -176,8 +186,10 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         payinAddress: persistedTunnel.payinAddress,
         payinExtraId: persistedTunnel.payinExtraId,
         presetId: persistedTunnel.presetId,
+        accessExpiresAt: persistedTunnel.accessExpiresAt ?? (persistedTunnel.createdAt + TUNNEL_ACCESS_TTL_MS),
       }
       : null
+  const activeTunnel = tunnelCandidate && clockNow < tunnelCandidate.accessExpiresAt ? tunnelCandidate : null
   const activeTunnelPreset = localTunnelSelected
     ? tunnelPreset
     : persistedTunnel
@@ -232,28 +244,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     }
   }
 
-  async function refreshSwapStatus(exchangeId) {
-    setRefreshingSwapId(exchangeId)
-    setHistoryError('')
-    try {
-      const refresh = httpsCallable(functions, 'refreshSwapStatus')
-      const { data } = await refresh({ exchangeId })
-      if (data.pending) {
-        setPendingSwaps((current) => current.map((swap) => swap.exchangeId === exchangeId ? { ...swap, ...data } : swap))
-      } else {
-        setSwapHistory((current) => current.some((swap) => swap.exchangeId === exchangeId)
-          ? current.map((swap) => swap.exchangeId === exchangeId ? data : swap)
-          : [data, ...current])
-        setPendingSwaps((current) => current.filter((swap) => swap.exchangeId !== exchangeId))
-        setTunnel((current) => current?.id === exchangeId ? null : current)
-      }
-    } catch {
-      setHistoryError("We couldn't refresh this swap's status right now. It's still in your history. Please try again in a moment.")
-    } finally {
-      setRefreshingSwapId('')
-    }
-  }
-
   useEffect(() => {
     if (!copyToast) return undefined
     const timeout = window.setTimeout(() => setCopyToast(null), 2200)
@@ -280,6 +270,12 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       document.removeEventListener('keydown', closeOnEscape)
     }
   }, [settingsOpen])
+
+  useEffect(() => {
+    if (!activeTunnel) return undefined
+    const interval = window.setInterval(() => setClockNow(Date.now()), 1000)
+    return () => window.clearInterval(interval)
+  }, [activeTunnel?.id])
 
   useEffect(() => {
     let active = true
@@ -690,11 +686,13 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setConfirming(false)
     setTunnel(null)
     setTunnelPreset(null)
+    setTunnelNotice('')
 
     try {
       const created = await createTunnel(selectedPreset, quote.quoteId)
       if (!created.payinAddress) throw new Error('ChangeNOW did not return a deposit address. The exchange may not support this route.')
-      setTunnel({ ...created, presetId: selectedPreset.id })
+      const tunnelAccessExpiresAt = created.accessExpiresAt ?? Date.now() + TUNNEL_ACCESS_TTL_MS
+      setTunnel({ ...created, presetId: selectedPreset.id, accessExpiresAt: tunnelAccessExpiresAt })
       setTunnelPreset(selectedPreset)
       setQuote(null)
       setHistoryError(created.trackingSaved ? '' : 'Automatic tracking for this exchange could not be saved. It may not appear in history automatically. Keep the exchange ID in its deposit details, if available, to check its status with ChangeNOW.')
@@ -703,6 +701,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           id: created.id,
           exchangeId: created.id,
           presetId: selectedPreset.id,
+          accessExpiresAt: tunnelAccessExpiresAt,
           status: created.status || 'waiting',
           payinAddress: created.payinAddress,
           payinExtraId: created.payinExtraId,
@@ -713,13 +712,14 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           toCurrency: selectedPreset.toCurrency,
           toNetwork: selectedPreset.toNetwork,
           estimatedAmount: quote.estimatedAmount,
-          createdAt: Date.now(),
+          createdAt: tunnelAccessExpiresAt - TUNNEL_ACCESS_TTL_MS,
         }, ...current.filter((swap) => swap.exchangeId !== created.id)])
         loadSwapHistory().catch(() => setHistoryError("We couldn't refresh tracking details for this exchange. Please refresh exchange activity shortly."))
       }
 
       const sourceWallet = getSourceWalletName(selectedPreset)
-      setNotice(`Tunnel ready. Send only ${selectedPreset.fromCurrency?.toUpperCase()} on ${selectedPreset.fromNetwork?.toUpperCase()} from ${sourceWallet} to this address. This deposit address is for this exchange only.`)
+      setNotice('')
+      setTunnelNotice(`Send only ${selectedPreset.fromCurrency?.toUpperCase()} on ${selectedPreset.fromNetwork?.toUpperCase()} from ${sourceWallet} to this address. This deposit address is for this exchange only.`)
     } catch (swapError) {
       setError(`ChangeNOW did not create a usable deposit tunnel. No deposit address is available; do not send funds. ${getErrorMessage(swapError)}`)
       setNotice('')
@@ -791,6 +791,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   setQuote(null)
                   setTunnel(null)
                   setTunnelPreset(null)
+                  setTunnelNotice('')
                   setNotice('')
                   setError('')
                   setHistoryError('')
@@ -798,6 +799,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                 type="button"
               >
                 <span className="route-item-top"><span>{getPresetName(preset)}</span><span className="route-dot" /></span>
+                <span className="route-item-path">{preset.fromCurrency?.toUpperCase()} ({preset.fromNetwork?.toUpperCase()}) → {preset.toCurrency?.toUpperCase()} ({preset.toNetwork?.toUpperCase()})</span>
               </button>
             ))}
           </nav>
@@ -947,7 +949,9 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
           {activeTunnel && !showNewPreset && (
             <section className="panel tunnel-panel">
-              <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap Tunnel Ready</h2></div><span className="live-badge">LIVE</span></div>
+              <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap Tunnel Ready</h2></div><span className="live-badge">EXPIRES IN {formatTunnelTimeRemaining(activeTunnel.accessExpiresAt, clockNow)}</span></div>
+              <p className="field-note">This deposit tunnel is available here for 5 minutes. Access ends in {formatTunnelTimeRemaining(activeTunnel.accessExpiresAt, clockNow)}; complete your transfer before then.</p>
+              {tunnelNotice && <div className="notice notice-success" role="status">{tunnelNotice}</div>}
               <p className="field-note">Send only {(activeTunnelPreset ?? selectedPreset)?.fromCurrency?.toUpperCase()} on {(activeTunnelPreset ?? selectedPreset)?.fromNetwork?.toUpperCase()} from {getSourceWalletName(activeTunnelPreset ?? selectedPreset)}. Sending another asset or network can permanently lose funds.</p>
               <div className="notice notice-warning single-use-warning">Use this deposit address once for this exchange only. Never reuse it for another quote or swap. Send the exact asset on the exact network shown above.</div>
               <div className="deposit-address"><span>Deposit address</span><code>{activeTunnel.payinAddress}</code><button aria-label={copyToast?.target === 'address' ? 'Address copied to clipboard' : 'Copy address'} aria-live="polite" className={`button button-quiet ${copyToast?.target === 'address' ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(activeTunnel.payinAddress, 'Address', 'address')} type="button">{copyToast?.target === 'address' ? '✓ Copied' : 'Copy address'}</button></div>
@@ -970,12 +974,12 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     <article className="history-item" key={swap.id}>
                       <div className="history-main">
                         <strong>{swap.fromCurrency?.toUpperCase()} <span>to</span> {swap.toCurrency?.toUpperCase()}</strong>
-                        <small>{swap.fromAmount} {swap.fromCurrency?.toUpperCase()} · {swap.fromNetwork?.toUpperCase()} to {swap.toNetwork?.toUpperCase()}</small>
-                        <small>{swap.createdAt ? new Date(swap.createdAt).toLocaleString() : 'Date unavailable'}{swap.toAmount ? ` · Est. receive ${swap.toAmount} ${swap.toCurrency?.toUpperCase()}` : ''}</small>
+                        <small>{swap.fromAmount} {swap.fromCurrency?.toUpperCase()} ({swap.fromNetwork?.toUpperCase()}) → {swap.toCurrency?.toUpperCase()} ({swap.toNetwork?.toUpperCase()})</small>
+                        <small>{swap.createdAt ? new Date(swap.createdAt).toLocaleString() : 'Date unavailable'}{swap.toAmount ? ` · ${status === 'finished' ? 'Received' : 'Est. receive'} ${swap.toAmount} ${swap.toCurrency?.toUpperCase()}` : ''}</small>
+                        {swap.exchangeId && <small>Exchange ID: <code>{swap.exchangeId}</code></small>}
                       </div>
                       <div className="history-status-controls">
                         <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status)}</span>
-                        {!isTerminal && swap.exchangeId && <button className="button button-quiet" disabled={refreshingSwapId === swap.exchangeId} onClick={() => refreshSwapStatus(swap.exchangeId)} type="button">{refreshingSwapId === swap.exchangeId ? 'Checking…' : 'Check status'}</button>}
                       </div>
                     </article>
                   )

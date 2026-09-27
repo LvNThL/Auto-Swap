@@ -21,6 +21,7 @@ const CHANGE_NOW_URL = 'https://api.changenow.io/v2/exchange'
 const QUOTE_COOLDOWN_MS = 2000
 const CREATE_COOLDOWN_MS = 10000
 const QUOTE_TTL_MS = 60000
+const TUNNEL_ACCESS_TTL_MS = 5 * 60 * 1000
 const PENDING_SWAP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 const CURRENCY_CACHE_TTL_MS = 300000
 const SAVED_RECORD_WRITE_COOLDOWN_MS = 1000
@@ -525,18 +526,21 @@ exports.createSwapTunnel = onCall(
     }
 
     const exchangeId = result.id ?? result.exchangeId ?? null
+    const tunnelOpenedAt = Date.now()
+    const accessExpiresAt = tunnelOpenedAt + TUNNEL_ACCESS_TTL_MS
     let trackingSaved = false
     if (typeof exchangeId === 'string') {
       try {
-        const now = Date.now()
         await database.collection('users').doc(request.auth.uid).collection('swapQuotes').doc(quoteId).update({
           exchangeId,
           status: typeof result.status === 'string' ? result.status : 'waiting',
           trackingStatus: 'pending',
           payinAddress,
           payinExtraId: result.payinExtraId ?? null,
-          updatedAt: Timestamp.fromMillis(now),
-          expiresAt: Timestamp.fromMillis(now + PENDING_SWAP_RETENTION_MS),
+          tunnelOpenedAt: Timestamp.fromMillis(tunnelOpenedAt),
+          tunnelAccessExpiresAt: Timestamp.fromMillis(accessExpiresAt),
+          updatedAt: Timestamp.fromMillis(tunnelOpenedAt),
+          expiresAt: Timestamp.fromMillis(tunnelOpenedAt + PENDING_SWAP_RETENTION_MS),
         })
         trackingSaved = true
       } catch (trackingError) {
@@ -552,6 +556,7 @@ exports.createSwapTunnel = onCall(
       fromAmount: String(result.fromAmount ?? exchange.fromAmount),
       toAmount: result.toAmount == null ? null : String(result.toAmount),
       status: result.status ?? 'waiting',
+      accessExpiresAt,
       trackingSaved,
     }
   },
@@ -583,7 +588,8 @@ exports.getSwapHistory = onCall(
         toCurrency: pendingDoc.get('toCurrency'),
         toNetwork: pendingDoc.get('toNetwork'),
         estimatedAmount: pendingDoc.get('estimatedAmount') ?? null,
-        createdAt: pendingDoc.get('createdAt')?.toMillis() ?? null,
+        createdAt: pendingDoc.get('tunnelOpenedAt')?.toMillis() ?? pendingDoc.get('createdAt')?.toMillis() ?? null,
+        accessExpiresAt: pendingDoc.get('tunnelAccessExpiresAt')?.toMillis() ?? null,
       })),
     }
   },
@@ -638,7 +644,7 @@ exports.refreshSwapStatus = onCall(
             toNetwork: pendingRecord.toNetwork,
             toAmount: result.toAmount == null ? pendingRecord.estimatedAmount ?? null : String(result.toAmount),
             status: result.status,
-            createdAt: pendingRecord.createdAt ?? Timestamp.fromMillis(Date.now()),
+            createdAt: pendingRecord.tunnelOpenedAt ?? pendingRecord.createdAt ?? Timestamp.fromMillis(Date.now()),
             updatedAt: Timestamp.fromMillis(Date.now()),
           })
           transaction.delete(pendingDoc.ref)
@@ -666,7 +672,7 @@ exports.refreshSwapStatus = onCall(
             toNetwork: pendingRecord.toNetwork,
             toAmount: pendingRecord.estimatedAmount ?? null,
             status: pendingHistoryStatus(result.status),
-            createdAt: pendingRecord.createdAt ?? now,
+            createdAt: pendingRecord.tunnelOpenedAt ?? pendingRecord.createdAt ?? now,
             updatedAt: now,
           })
           transaction.delete(pendingDoc.ref)
