@@ -119,6 +119,7 @@ function getErrorMessage(error) {
 }
 
 function formatSwapStatus(status) {
+  if (String(status).toLowerCase() === 'waiting') return 'Waiting for deposit'
   if (String(status).toLowerCase() === 'finished') return 'Completed'
   return String(status || 'unknown').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
@@ -132,6 +133,46 @@ function formatTunnelTimeRemaining(expiresAt, now) {
 
 const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
 const depositReceivedStatuses = new Set(['confirming', 'exchanging', 'sending', 'finished', 'failed', 'refunded'])
+
+function SwapHistoryItem({ swap, statusCheck, copyToast, copyToClipboard }) {
+  const status = String(swap.status || 'unknown').toLowerCase()
+  const isTerminal = terminalSwapStatuses.has(status)
+  const addressTarget = `history-address-${swap.exchangeId}`
+  const memoTarget = `history-memo-${swap.exchangeId}`
+
+  return (
+    <article className="history-item">
+      <div className="history-main">
+        <strong>{swap.fromCurrency?.toUpperCase()} <span>to</span> {swap.toCurrency?.toUpperCase()}</strong>
+        <small>{swap.fromAmount} {swap.fromCurrency?.toUpperCase()} ({swap.fromNetwork?.toUpperCase()}) → {swap.toCurrency?.toUpperCase()} ({swap.toNetwork?.toUpperCase()})</small>
+        <small>{swap.createdAt ? new Date(swap.createdAt).toLocaleString() : 'Date unavailable'}{swap.toAmount ? ` · ${status === 'finished' ? 'Received' : 'Est. receive'} ${swap.toAmount} ${swap.toCurrency?.toUpperCase()}` : ''}</small>
+        {swap.exchangeId && <small>Exchange ID: <code>{swap.exchangeId}</code></small>}
+        {statusCheck?.error && <small className="history-status-delayed" role="status">Status check delayed{statusCheck.checkedAt ? ` · Last successful check ${new Date(statusCheck.checkedAt).toLocaleTimeString()}` : ''}. We'll retry automatically; this doesn't change the recorded status.</small>}
+        {swap.pending && swap.payinAddress && (
+          <div className="history-deposit">
+            <span>Deposit address for this tunnel only</span>
+            <code>{swap.payinAddress}</code>
+            <button aria-live="polite" className={`button button-quiet ${copyToast?.target === addressTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(swap.payinAddress, 'Deposit address', addressTarget)} type="button">{copyToast?.target === addressTarget ? '✓ Copied' : 'Copy address'}</button>
+            {swap.payinExtraId && <>
+              <span>Required memo or tag</span>
+              <code>{swap.payinExtraId}</code>
+              <button aria-live="polite" className={`button button-quiet ${copyToast?.target === memoTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(swap.payinExtraId, 'Memo or tag', memoTarget)} type="button">{copyToast?.target === memoTarget ? '✓ Copied' : 'Copy memo or tag'}</button>
+            </>}
+          </div>
+        )}
+        {(swap.payinExplorerUrl || swap.payoutExplorerUrl) && (
+          <div className="history-blockchain-links">
+            {swap.payinExplorerUrl && <a className="history-blockchain-link" href={swap.payinExplorerUrl} rel="noopener noreferrer" target="_blank">View deposit on blockchain</a>}
+            {swap.payoutExplorerUrl && <a className="history-blockchain-link" href={swap.payoutExplorerUrl} rel="noopener noreferrer" target="_blank">View payout on blockchain</a>}
+          </div>
+        )}
+      </div>
+      <div className="history-status-controls">
+        <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status)}</span>
+      </div>
+    </article>
+  )
+}
 
 export default function SwapEngine({ user, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed }) {
   const [presets, setPresets] = useState([])
@@ -167,6 +208,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [archiveDownloadBusy, setArchiveDownloadBusy] = useState('')
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
+  const [statusCheckByExchange, setStatusCheckByExchange] = useState({})
   const [copyToast, setCopyToast] = useState(null)
   const [clockNow, setClockNow] = useState(() => Date.now())
 
@@ -206,6 +248,11 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       pending: true,
     })),
   ].sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
+  const waitingSwapRows = visibleSwapHistory.filter((swap) =>
+    swap.pending && String(swap.status || '').toLowerCase() === 'waiting')
+  const olderWaitingSwaps = waitingSwapRows.slice(1)
+  const olderWaitingIds = new Set(olderWaitingSwaps.map((swap) => swap.id))
+  const recentSwapHistory = visibleSwapHistory.filter((swap) => !olderWaitingIds.has(swap.id))
   const fromCurrencies = currencies.filter((currency) => currency.canSell)
   const toCurrencies = currencies.filter((currency) => currency.canBuy)
   const fromSearchLower = fromSearch.trim().toLowerCase()
@@ -310,20 +357,32 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         const swaps = data.swaps ?? []
         const waitingForDeposit = data.pendingSwaps ?? []
         if (!active) return
+        setHistoryError('')
         setSwapHistory(swaps)
         setPendingSwaps(waitingForDeposit)
         const outstandingHistory = swaps.filter((swap) => swap.exchangeId && !terminalSwapStatuses.has(String(swap.status).toLowerCase()))
         const pending = [...outstandingHistory, ...waitingForDeposit.filter((swap) => swap.exchangeId)]
         const batch = pending.slice(pollOffset, pollOffset + 5)
         pollOffset = pending.length ? (pollOffset + batch.length) % pending.length : 0
-        const refreshed = await Promise.all(batch.map(async (swap) => {
+        const statusChecks = await Promise.all(batch.map(async (swap) => {
           try {
-            return (await refreshStatus({ exchangeId: swap.exchangeId })).data
+            return { exchangeId: swap.exchangeId, data: (await refreshStatus({ exchangeId: swap.exchangeId })).data }
           } catch {
-            return null
+            return { exchangeId: swap.exchangeId, error: true }
           }
         }))
+        const refreshed = statusChecks.flatMap((check) => check.data ? [check.data] : [])
         if (active) {
+          const checkedAt = Date.now()
+          setStatusCheckByExchange((current) => {
+            const updated = { ...current }
+            for (const check of statusChecks) {
+              updated[check.exchangeId] = check.error
+                ? { ...updated[check.exchangeId], error: true }
+                : { error: false, checkedAt }
+            }
+            return updated
+          })
           const updatedHistory = new Map(refreshed.filter((swap) => swap && !swap.pending && !swap.discarded)
             .map((swap) => [swap.exchangeId, swap]))
           setSwapHistory((current) => {
@@ -342,6 +401,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
             .map((swap) => ({ ...swap, ...updatedPending.get(swap.exchangeId) })))
         }
       } catch {
+        if (active) setHistoryError("We couldn't refresh exchange activity just now. Existing swap statuses are unchanged; we'll retry automatically.")
       } finally {
         polling = false
       }
@@ -940,37 +1000,28 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           <section className="panel history-panel" aria-labelledby="swap-history-title">
             <div className="panel-heading"><div><p className="eyebrow">EXCHANGE ACTIVITY</p><h2 id="swap-history-title">Swap History</h2></div></div>
             {historyError && !showNewPreset && <div className="notice notice-warning" role="status">{historyError}</div>}
-            {pendingSwaps.length > 0 && <div className="notice notice-warning" role="status">New swaps appear here as Waiting while the deposit tunnel is open. AutoSwap checks their status with ChangeNOW. If the tunnel expires before a deposit is received, it is marked Cancelled. Swaps with a detected deposit remain here through processing and completion.</div>}
             {historyLoading ? <p className="history-empty">Loading exchange activity…</p> : visibleSwapHistory.length === 0 ? <p className="history-empty">Swaps appear here as Waiting when a deposit tunnel opens. If a tunnel expires before a deposit is received, it is marked Cancelled. Once a deposit is detected, the swap remains in history through processing and completion.</p> : (
-              <div className="history-list">
-                {visibleSwapHistory.map((swap) => {
-                  const status = String(swap.status || 'unknown').toLowerCase()
-                  const isTerminal = terminalSwapStatuses.has(status)
-                  return (
-                    <article className="history-item" key={swap.id}>
-                      <div className="history-main">
-                        <strong>{swap.fromCurrency?.toUpperCase()} <span>to</span> {swap.toCurrency?.toUpperCase()}</strong>
-                        <small>{swap.fromAmount} {swap.fromCurrency?.toUpperCase()} ({swap.fromNetwork?.toUpperCase()}) → {swap.toCurrency?.toUpperCase()} ({swap.toNetwork?.toUpperCase()})</small>
-                        <small>{swap.createdAt ? new Date(swap.createdAt).toLocaleString() : 'Date unavailable'}{swap.toAmount ? ` · ${status === 'finished' ? 'Received' : 'Est. receive'} ${swap.toAmount} ${swap.toCurrency?.toUpperCase()}` : ''}</small>
-                        {swap.exchangeId && <small>Exchange ID: <code>{swap.exchangeId}</code></small>}
-                        {(swap.payinExplorerUrl || swap.payoutExplorerUrl) && (
-                          <div className="history-blockchain-links">
-                            {swap.payinExplorerUrl && <a className="history-blockchain-link" href={swap.payinExplorerUrl} rel="noopener noreferrer" target="_blank">View deposit on blockchain</a>}
-                            {swap.payoutExplorerUrl && <a className="history-blockchain-link" href={swap.payoutExplorerUrl} rel="noopener noreferrer" target="_blank">View payout on blockchain</a>}
-                          </div>
-                        )}
-                      </div>
-                      <div className="history-status-controls">
-                        <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status)}</span>
-                      </div>
-                    </article>
-                  )
-                })}
-              </div>
+              <>
+                <div className="history-list">
+                  {recentSwapHistory.map((swap) => (
+                    <SwapHistoryItem key={swap.id} copyToast={copyToast} copyToClipboard={copyToClipboard} statusCheck={statusCheckByExchange[swap.exchangeId]} swap={swap} />
+                  ))}
+                </div>
+                {olderWaitingSwaps.length > 0 && (
+                  <details className="history-older-waiting">
+                    <summary>Older waiting tunnels ({olderWaitingSwaps.length})</summary>
+                    <div className="history-list">
+                      {olderWaitingSwaps.map((swap) => (
+                        <SwapHistoryItem key={swap.id} copyToast={copyToast} copyToClipboard={copyToClipboard} statusCheck={statusCheckByExchange[swap.exchangeId]} swap={swap} />
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </>
             )}
             <div className="history-archives">
               <div className="history-archives-heading">
-                <div><strong>Monthly tax archives</strong><small>Completed executions are retained for download.</small></div>
+                <div><strong>Monthly Tax Archives</strong><small>Completed executions are retained for download.</small></div>
                 <button className="button button-quiet" disabled={historyLoading} onClick={() => loadHistoryArchives().catch(() => setArchiveError('Monthly archives could not be loaded. Please try again.'))} type="button">Refresh</button>
               </div>
               {archiveError && <div className="notice notice-warning" role="status">{archiveError}</div>}
