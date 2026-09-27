@@ -163,13 +163,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 @media (max-width: 760px) {
   .topbar { height: 62px; padding: 0 18px; }
-  .workspace { min-height: calc(100vh - 62px); grid-template-columns: 1fr; }
-  .route-rail { padding: 17px 18px 14px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .workspace { min-height: calc(100vh - 62px); grid-template-columns: minmax(0, 1fr); }
+  .route-rail { min-width: 0; padding: 17px 18px 14px; border-right: 0; border-bottom: 1px solid var(--line); }
   .rail-note { display: none; }
-  .route-list { display: flex; overflow-x: auto; margin-top: 13px; padding-bottom: 2px; }
+  .route-list { min-width: 0; display: flex; overflow-x: auto; margin-top: 13px; padding-bottom: 2px; }
   .route-item { min-width: 165px; border-color: var(--line); background: rgba(251,252,249,.58); }
   .empty-routes { margin: 10px 0 0; }
-  .desk-content { padding: 30px 18px 55px; }
+  .desk-content { min-width: 0; padding: 30px 18px 55px; }
   .page-heading { margin-bottom: 23px; }
   .page-heading h1 { font-size: 29px; }
   .route-summary { grid-template-columns: minmax(0,1fr) 92px minmax(0,1fr); gap: 9px; padding: 17px 14px; }
