@@ -8,7 +8,7 @@ import {
   deleteAddressBookEntry,
   listAddressBookEntries,
 } from '../services/AddressBookManager.js'
-import { createPreset, deletePreset, listPresets } from '../services/PresetManager.js'
+import { createPreset, deletePreset, listPresets, updatePreset } from '../services/PresetManager.js'
 
 const emptyPreset = {
   name: '',
@@ -131,12 +131,14 @@ export default function SwapEngine({ user }) {
   const [selectedId, setSelectedId] = useState('')
   const [form, setForm] = useState(emptyPreset)
   const [showNewPreset, setShowNewPreset] = useState(false)
+  const [editingPresetId, setEditingPresetId] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [quote, setQuote] = useState(null)
   const [tunnel, setTunnel] = useState(null)
+  const [tunnelPreset, setTunnelPreset] = useState(null)
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
   const fromCurrencies = currencies.filter((currency) => currency.canSell)
@@ -330,6 +332,54 @@ export default function SwapEngine({ user }) {
     }
   }
 
+  function beginEditPreset() {
+    if (!selectedPreset) return
+    setForm({
+      name: selectedPreset.name ?? '',
+      fundingMethod: selectedPreset.fundingMethod ?? emptyPreset.fundingMethod,
+      fromCurrency: selectedPreset.fromCurrency ?? emptyPreset.fromCurrency,
+      fromNetwork: selectedPreset.fromNetwork ?? emptyPreset.fromNetwork,
+      toCurrency: selectedPreset.toCurrency ?? emptyPreset.toCurrency,
+      toNetwork: selectedPreset.toNetwork ?? emptyPreset.toNetwork,
+      fromAmount: selectedPreset.fromAmount ?? '',
+      destinationName: selectedPreset.destinationName ?? '',
+      destinationAddress: selectedPreset.destinationAddress ?? '',
+      destinationExtraId: selectedPreset.destinationExtraId ?? '',
+      refundAddress: selectedPreset.refundAddress ?? '',
+      refundExtraId: selectedPreset.refundExtraId ?? '',
+    })
+    setEditingPresetId(selectedPreset.id)
+    setFromSearch('')
+    setToSearch('')
+    setQuote(null)
+    setConfirming(false)
+    setNotice('')
+    setError('')
+    setShowNewPreset(true)
+  }
+
+  function cancelPresetForm() {
+    setShowNewPreset(false)
+    setEditingPresetId('')
+    setForm(emptyPreset)
+    setFromSearch('')
+    setToSearch('')
+    setError('')
+  }
+
+  function toggleNewPreset() {
+    if (showNewPreset) {
+      cancelPresetForm()
+      return
+    }
+    setEditingPresetId('')
+    setForm(emptyPreset)
+    setFromSearch('')
+    setToSearch('')
+    setError('')
+    setShowNewPreset(true)
+  }
+
   async function savePreset(event) {
     event.preventDefault()
     setError('')
@@ -337,6 +387,7 @@ export default function SwapEngine({ user }) {
       setError('Choose a send asset and receive asset before saving this preset.')
       return
     }
+    setBusy(true)
     try {
       const preset = {
         ...form,
@@ -351,12 +402,24 @@ export default function SwapEngine({ user }) {
           ? nativeEvmRoutes[form.fromNetwork]?.chainId ?? null
           : null,
       }
-      await createPreset(user.uid, preset)
+      if (editingPresetId) {
+        await updatePreset(user.uid, editingPresetId, preset)
+      } else {
+        await createPreset(user.uid, preset)
+      }
       await refreshPresets()
+      setQuote(null)
+      setConfirming(false)
+      setNotice('')
       setShowNewPreset(false)
+      setEditingPresetId('')
       setForm(emptyPreset)
+      setFromSearch('')
+      setToSearch('')
     } catch (saveError) {
       setError(getErrorMessage(saveError))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -366,6 +429,7 @@ export default function SwapEngine({ user }) {
     try {
       await deletePreset(user.uid, selectedPreset.id)
       setTunnel(null)
+      setTunnelPreset(null)
       await refreshPresets()
     } catch (deleteError) {
       setError(getErrorMessage(deleteError))
@@ -472,6 +536,7 @@ export default function SwapEngine({ user }) {
     setNotice('Creating a swap tunnel…')
     setConfirming(false)
     setTunnel(null)
+    setTunnelPreset(null)
 
     try {
       let route = null
@@ -488,6 +553,7 @@ export default function SwapEngine({ user }) {
       const created = await createTunnel(selectedPreset, quote.quoteId)
       if (!created.payinAddress) throw new Error('ChangeNOW did not return a deposit address. The exchange may not support this route.')
       setTunnel(created)
+      setTunnelPreset(selectedPreset)
       setQuote(null)
 
       if (selectedPreset.fundingMethod === 'venmo' || !route) {
@@ -539,7 +605,7 @@ export default function SwapEngine({ user }) {
         <aside className="route-rail">
           <div className="rail-heading">
             <div><p className="eyebrow">YOUR WORKSPACE</p><h2>Saved routes</h2></div>
-            <button className="icon-button" aria-label="Create route" title="Create route" onClick={() => setShowNewPreset((visible) => !visible)} type="button">+</button>
+            <button className="icon-button" aria-label="Create route" title="Create route" onClick={toggleNewPreset} type="button">+</button>
           </div>
           {presets.length === 0 && <p className="empty-routes">No routes saved yet.</p>}
           <nav className="route-list" aria-label="Saved routes">
@@ -547,7 +613,7 @@ export default function SwapEngine({ user }) {
               <button
                 className={`route-item ${selectedId === preset.id ? 'route-item-active' : ''}`}
                 key={preset.id}
-                onClick={() => { setSelectedId(preset.id); setQuote(null); setTunnel(null); setNotice(''); setError('') }}
+                onClick={() => { setSelectedId(preset.id); setQuote(null); setTunnel(null); setTunnelPreset(null); setNotice(''); setError('') }}
                 type="button"
               >
                 <span className="route-item-top"><span>{preset.name}</span><span className="route-dot" /></span>
@@ -571,7 +637,7 @@ export default function SwapEngine({ user }) {
 
           {showNewPreset && (
             <section className="panel new-route-panel">
-              <div className="panel-heading"><div><p className="eyebrow">NEW PRESET</p><h2>Route details</h2></div></div>
+              <div className="panel-heading"><div><p className="eyebrow">{editingPresetId ? 'EDIT PRESET' : 'NEW PRESET'}</p><h2>{editingPresetId ? 'Edit saved route' : 'Route details'}</h2></div></div>
               <form className="preset-form" onSubmit={savePreset}>
                 <label className="field-wide">Saved preset name<input name="name" value={form.name} onChange={updateForm} placeholder="For example, BTC to ETH" maxLength="48" required /></label>
                 <p className="field-note field-wide">Use this name to identify the saved route later. It does not affect the swap.</p>
@@ -671,7 +737,7 @@ export default function SwapEngine({ user }) {
                   <button className="button button-quiet" onClick={() => beginSaveAddress('refund')} type="button">Save refund address</button>
                 </div>
                 <p className="field-note field-wide">{form.fundingMethod === 'venmo' ? 'Venmo supports only certain coins and networks. Confirm that your account can send the selected asset.' : 'Confirm that Trust Wallet supports the selected asset and network. Supported native EVM coins can be sent with wallet approval; other assets require a manual deposit after tunnel creation.'} ChangeNOW checks the selected pair before you confirm.</p>
-                <div className="form-actions field-wide"><button className="button button-quiet" onClick={() => setShowNewPreset(false)} type="button">Cancel</button><button className="button button-primary" disabled={currenciesLoading || !selectedFromCurrency?.canSell || !selectedToCurrency?.canBuy} type="submit">Save preset</button></div>
+                <div className="form-actions field-wide"><button className="button button-quiet" disabled={busy} onClick={cancelPresetForm} type="button">Cancel</button><button className="button button-primary" disabled={busy || currenciesLoading || !selectedFromCurrency?.canSell || !selectedToCurrency?.canBuy} type="submit">{busy ? 'Saving…' : editingPresetId ? 'Save changes' : 'Save preset'}</button></div>
               </form>
             </section>
           )}
@@ -695,7 +761,7 @@ export default function SwapEngine({ user }) {
                   <div><span>Destination network</span><strong>{selectedPreset.toNetwork?.toUpperCase()}</strong></div>
                   <div><span>Delivery address</span><strong className="address-value">{selectedPreset.destinationAddress}</strong></div>
                 </div>
-                <div className="panel-footer"><p>ChangeNOW checks the current minimum and estimates the receive amount before any deposit tunnel is created.</p><button className="button button-primary" disabled={busy} onClick={requestQuote} type="button">{busy ? 'Getting quote…' : 'Review swap'} <span aria-hidden="true">↗</span></button></div>
+                <div className="panel-footer"><p>ChangeNOW checks the current minimum and estimates the receive amount before any deposit tunnel is created.</p><div className="preset-actions"><button className="button button-quiet" disabled={busy} onClick={beginEditPreset} type="button">Edit preset</button><button className="button button-primary" disabled={busy} onClick={requestQuote} type="button">{busy ? 'Getting quote…' : 'Review swap'} <span aria-hidden="true">↗</span></button></div></div>
               </section>
             </>
           )}
@@ -705,7 +771,7 @@ export default function SwapEngine({ user }) {
           {tunnel && (
             <section className="panel tunnel-panel">
               <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap tunnel ready</h2></div><span className="live-badge">LIVE</span></div>
-              <p className="field-note">Send only {selectedPreset?.fromCurrency?.toUpperCase()} on {selectedPreset?.fromNetwork?.toUpperCase()}. Sending another asset or network can permanently lose funds.</p>
+              <p className="field-note">Send only {(tunnelPreset ?? selectedPreset)?.fromCurrency?.toUpperCase()} on {(tunnelPreset ?? selectedPreset)?.fromNetwork?.toUpperCase()}. Sending another asset or network can permanently lose funds.</p>
               <div className="deposit-address"><span>Deposit address</span><code>{tunnel.payinAddress}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinAddress)} type="button">Copy address</button></div>
               {tunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{tunnel.payinExtraId}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinExtraId)} type="button">Copy memo or tag</button></div>}
               {tunnel.transactionHash && <div className="transaction-hash"><span>Wallet transaction</span><code>{tunnel.transactionHash}</code></div>}
