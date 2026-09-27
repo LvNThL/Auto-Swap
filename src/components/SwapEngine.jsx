@@ -76,6 +76,18 @@ function formatCurrencyOption(currency) {
   )
 }
 
+function formatEstimatedRate(fromAmount, estimatedAmount, fromTicker, toTicker) {
+  const sentAmount = Number(fromAmount)
+  const receivedAmount = Number(estimatedAmount)
+  if (!Number.isFinite(sentAmount) || sentAmount <= 0 || !Number.isFinite(receivedAmount) || receivedAmount <= 0) return null
+
+  const rate = receivedAmount / sentAmount
+  if (!Number.isFinite(rate) || rate <= 0) return null
+
+  const formattedRate = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 8 }).format(rate)
+  return `1 ${fromTicker.toUpperCase()} ≈ ${formattedRate} ${toTicker.toUpperCase()}`
+}
+
 function searchCurrencies(currencies, query) {
   const normalizedQuery = query.trim().toLowerCase()
   if (!normalizedQuery) {
@@ -137,6 +149,9 @@ export default function SwapEngine({ user }) {
     currency.ticker === form.fromCurrency && currency.network === form.fromNetwork)
   const selectedToCurrency = currencies.find((currency) =>
     currency.ticker === form.toCurrency && currency.network === form.toNetwork)
+  const estimatedRate = quote && selectedPreset
+    ? formatEstimatedRate(selectedPreset.fromAmount, quote.estimatedAmount, selectedPreset.fromCurrency, selectedPreset.toCurrency)
+    : null
   const destinationAddressEntries = addressBookEntries.filter((entry) =>
     entry.purpose === 'destination' && entry.ticker === selectedToCurrency?.ticker && entry.network === selectedToCurrency?.network)
   const refundAddressEntries = addressBookEntries.filter((entry) =>
@@ -607,7 +622,8 @@ export default function SwapEngine({ user }) {
                   <strong>{form.fundingMethod === 'venmo' ? 'Trust Wallet' : 'Venmo'}</strong>
                   <p>{form.fundingMethod === 'venmo' ? 'Venmo sends to the ChangeNOW deposit address. ChangeNOW sends the swapped crypto to your Trust Wallet address.' : 'Trust Wallet sends to the ChangeNOW deposit address after you approve. ChangeNOW sends the swapped crypto to your Venmo crypto address.'}</p>
                 </div>
-                <label>Amount<input name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
+                <label>Amount to send ({form.fromCurrency.toUpperCase()})<input name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
+                <p className="field-note field-wide">Enter the {selectedFromCurrency?.ticker.toUpperCase() ?? form.fromCurrency.toUpperCase()} amount you will send to ChangeNOW on {selectedFromCurrency?.network.toUpperCase() ?? form.fromNetwork.toUpperCase()}. The receive amount is estimated separately after you request a quote.</p>
                 <label className="field-wide">{form.fundingMethod === 'venmo' ? 'Trust Wallet receiving address' : 'Venmo crypto receiving address'}<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder={form.fundingMethod === 'venmo' ? 'Paste your Trust Wallet address' : 'Paste the crypto address shown in Venmo'} required /></label>
                 {selectedToCurrency?.hasExternalId && <label className="field-wide">Destination memo or tag<input name="destinationExtraId" value={form.destinationExtraId} onChange={updateForm} autoComplete="off" placeholder="Required by this asset" required /></label>}
                 <div className="address-tools field-wide">
@@ -711,6 +727,7 @@ export default function SwapEngine({ user }) {
               <div><dt>Send</dt><dd>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} on {selectedPreset.fromNetwork}</dd></div>
               <div><dt>Receive</dt><dd>{selectedPreset.toCurrency?.toUpperCase()} on {selectedPreset.toNetwork}</dd></div>
               <div><dt>Estimated receive</dt><dd>{quote.estimatedAmount} {selectedPreset.toCurrency?.toUpperCase()}</dd></div>
+              {estimatedRate && <div><dt>Estimated rate</dt><dd><code>{estimatedRate}</code><br />Based on this quote and send amount; not a fixed rate.</dd></div>}
               <div><dt>Minimum send</dt><dd>{quote.minimumAmount} {selectedPreset.fromCurrency?.toUpperCase()}</dd></div>
               <div><dt>Destination</dt><dd>{selectedPreset.fundingMethod === 'venmo' ? 'Trust Wallet' : 'Venmo'}<br /><code>{selectedPreset.destinationAddress}</code></dd></div>
               {selectedPreset.destinationExtraId && <div><dt>Memo or tag</dt><dd><code>{selectedPreset.destinationExtraId}</code></dd></div>}
