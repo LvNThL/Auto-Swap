@@ -12,19 +12,36 @@ const emptyPreset = {
   toCurrency: 'eth',
   toNetwork: 'eth',
   fromAmount: '',
-  chainId: '1',
   destinationName: 'Trust Wallet',
   destinationAddress: '',
+  destinationExtraId: '',
 }
 
 const nativeEvmRoutes = {
   eth: { chainId: 1, currencies: ['eth'] },
-  polygon: { chainId: 137, currencies: ['matic', 'pol'] },
+  matic: { chainId: 137, currencies: ['matic', 'pol'] },
   bsc: { chainId: 56, currencies: ['bnb'] },
   arbitrum: { chainId: 42161, currencies: ['eth'] },
-  optimism: { chainId: 10, currencies: ['eth'] },
+  op: { chainId: 10, currencies: ['eth'] },
   base: { chainId: 8453, currencies: ['eth'] },
   avaxc: { chainId: 43114, currencies: ['avax'] },
+}
+
+function currencyGroups(currencies) {
+  const featured = currencies.filter((currency) => currency.featured)
+  const other = currencies.filter((currency) => !currency.featured)
+  return [
+    ...(featured.length ? [{ label: 'Popular', currencies: featured }] : []),
+    { label: 'All active crypto assets', currencies: other },
+  ]
+}
+
+function isWalletNativeCurrency(currency) {
+  return Boolean(
+    currency &&
+    !currency.tokenContract &&
+    nativeEvmRoutes[currency.network]?.currencies.includes(currency.ticker),
+  )
 }
 
 function getErrorMessage(error) {
@@ -35,6 +52,9 @@ function getErrorMessage(error) {
 
 export default function SwapEngine({ user }) {
   const [presets, setPresets] = useState([])
+  const [currencies, setCurrencies] = useState([])
+  const [currenciesLoading, setCurrenciesLoading] = useState(true)
+  const [currencyError, setCurrencyError] = useState('')
   const [selectedId, setSelectedId] = useState('')
   const [form, setForm] = useState(emptyPreset)
   const [showNewPreset, setShowNewPreset] = useState(false)
@@ -46,6 +66,13 @@ export default function SwapEngine({ user }) {
   const [tunnel, setTunnel] = useState(null)
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
+  const fromCurrencies = form.fundingMethod === 'trust-wallet'
+    ? currencies.filter(isWalletNativeCurrency)
+    : currencies
+  const selectedFromCurrency = currencies.find((currency) =>
+    currency.ticker === form.fromCurrency && currency.network === form.fromNetwork)
+  const selectedToCurrency = currencies.find((currency) =>
+    currency.ticker === form.toCurrency && currency.network === form.toNetwork)
 
   async function refreshPresets() {
     const saved = await listPresets(user.uid)
@@ -54,15 +81,71 @@ export default function SwapEngine({ user }) {
   }
 
   useEffect(() => {
+    let active = true
     refreshPresets().catch(() => setError('Saved routes could not be loaded. Check your Firebase setup.'))
+
+    const getCurrencies = httpsCallable(functions, 'getSwapCurrencies')
+    getCurrencies({})
+      .then(({ data }) => {
+        if (!active) return
+        const availableCurrencies = data.currencies ?? []
+        setCurrencies(availableCurrencies)
+        setCurrencyError('')
+        setForm((current) => {
+          const hasCurrency = (ticker, network) => availableCurrencies.some((currency) =>
+            currency.ticker === ticker && currency.network === network)
+          const defaultFrom = availableCurrencies.find((currency) => currency.ticker === 'btc' && currency.network === 'btc')
+          const defaultTo = availableCurrencies.find((currency) => currency.ticker === 'eth' && currency.network === 'eth')
+          return {
+            ...current,
+            fromCurrency: hasCurrency(current.fromCurrency, current.fromNetwork) ? current.fromCurrency : defaultFrom?.ticker ?? '',
+            fromNetwork: hasCurrency(current.fromCurrency, current.fromNetwork) ? current.fromNetwork : defaultFrom?.network ?? '',
+            toCurrency: hasCurrency(current.toCurrency, current.toNetwork) ? current.toCurrency : defaultTo?.ticker ?? '',
+            toNetwork: hasCurrency(current.toCurrency, current.toNetwork) ? current.toNetwork : defaultTo?.network ?? '',
+          }
+        })
+      })
+      .catch((catalogError) => {
+        if (active) setCurrencyError(getErrorMessage(catalogError))
+      })
+      .finally(() => {
+        if (active) setCurrenciesLoading(false)
+      })
+
+    return () => { active = false }
   }, [user.uid])
 
   function updateForm(event) {
     const { name, value } = event.target
+    if (name === 'fundingMethod') {
+      const walletCurrency = currencies.find(isWalletNativeCurrency)
+      setForm((current) => ({
+        ...current,
+        fundingMethod: value,
+        destinationName: value === 'venmo' ? 'Trust Wallet' : 'PayPal',
+        ...(value === 'trust-wallet' && walletCurrency
+          ? { fromCurrency: walletCurrency.ticker, fromNetwork: walletCurrency.network }
+          : {}),
+      }))
+      return
+    }
+
     setForm((current) => ({
       ...current,
       [name]: value,
-      ...(name === 'fundingMethod' ? { destinationName: value === 'venmo' ? 'Trust Wallet' : 'PayPal' } : {}),
+      ...(name === 'toCurrency' || name === 'toNetwork' ? { destinationExtraId: '' } : {}),
+    }))
+  }
+
+  function updateSelectedCurrency(side, event) {
+    const currency = currencies.find((option) => option.id === event.target.value)
+    if (!currency) return
+
+    setForm((current) => ({
+      ...current,
+      [`${side}Currency`]: currency.ticker,
+      [`${side}Network`]: currency.network,
+      ...(side === 'to' ? { destinationExtraId: '' } : {}),
     }))
   }
 
@@ -75,7 +158,10 @@ export default function SwapEngine({ user }) {
         name: form.name.trim(),
         destinationAddress: form.destinationAddress.trim(),
         fromAmount: form.fromAmount.trim(),
-        chainId: Number(form.chainId),
+        destinationExtraId: form.destinationExtraId.trim(),
+        chainId: form.fundingMethod === 'trust-wallet'
+          ? nativeEvmRoutes[form.fromNetwork]?.chainId ?? null
+          : null,
       }
       await createPreset(user.uid, preset)
       await refreshPresets()
@@ -137,6 +223,7 @@ export default function SwapEngine({ user }) {
       toNetwork: preset.toNetwork,
       fromAmount: preset.fromAmount,
       toAddress: preset.destinationAddress,
+      toExtraId: preset.destinationExtraId,
       quoteId,
     })
     return result.data
@@ -152,7 +239,9 @@ export default function SwapEngine({ user }) {
     try {
       if (selectedPreset.fundingMethod === 'trust-wallet') {
         const route = nativeEvmRoutes[selectedPreset.fromNetwork?.toLowerCase()]
-        if (!route || !route.currencies.includes(selectedPreset.fromCurrency?.toLowerCase())) {
+        const sourceCurrency = currencies.find((currency) =>
+          currency.ticker === selectedPreset.fromCurrency && currency.network === selectedPreset.fromNetwork)
+        if (!route || !route.currencies.includes(selectedPreset.fromCurrency?.toLowerCase()) || !isWalletNativeCurrency(sourceCurrency)) {
           throw new Error('Wallet automation supports native EVM coins only. Check that the currency and network are a supported pair.')
         }
         if (Number(selectedPreset.chainId) !== route.chainId) {
@@ -168,6 +257,7 @@ export default function SwapEngine({ user }) {
         toNetwork: selectedPreset.toNetwork,
         fromAmount: selectedPreset.fromAmount,
         toAddress: selectedPreset.destinationAddress,
+        toExtraId: selectedPreset.destinationExtraId,
       })
       setQuote(result.data)
       setConfirming(true)
@@ -198,7 +288,9 @@ export default function SwapEngine({ user }) {
       let route = null
       if (selectedPreset.fundingMethod === 'trust-wallet') {
         route = nativeEvmRoutes[selectedPreset.fromNetwork?.toLowerCase()]
-        if (!route || !route.currencies.includes(selectedPreset.fromCurrency?.toLowerCase())) {
+        const sourceCurrency = currencies.find((currency) =>
+          currency.ticker === selectedPreset.fromCurrency && currency.network === selectedPreset.fromNetwork)
+        if (!route || !route.currencies.includes(selectedPreset.fromCurrency?.toLowerCase()) || !isWalletNativeCurrency(sourceCurrency)) {
           throw new Error('Wallet automation supports native EVM coins only. Check that the currency and network are a supported pair.')
         }
         if (Number(selectedPreset.chainId) !== route.chainId) {
@@ -294,16 +386,52 @@ export default function SwapEngine({ user }) {
               <form className="preset-form" onSubmit={savePreset}>
                 <label>Route name<input name="name" value={form.name} onChange={updateForm} placeholder="My ETH route" maxLength="48" required /></label>
                 <label>Funding source<select name="fundingMethod" value={form.fundingMethod} onChange={updateForm}><option value="venmo">Venmo manual deposit</option><option value="trust-wallet">Trust Wallet transfer</option></select></label>
-                <label>From currency<input name="fromCurrency" value={form.fromCurrency} onChange={updateForm} placeholder="eth" required /></label>
-                <label>From network<input name="fromNetwork" value={form.fromNetwork} onChange={updateForm} placeholder="eth" required /></label>
-                <label>To currency<input name="toCurrency" value={form.toCurrency} onChange={updateForm} placeholder="btc" required /></label>
-                <label>To network<input name="toNetwork" value={form.toNetwork} onChange={updateForm} placeholder="btc" required /></label>
+                {currenciesLoading && <p className="field-note field-wide" role="status">Loading ChangeNOW assets…</p>}
+                {currencyError && <p className="notice notice-error field-wide" role="alert">{currencyError}</p>}
+                <label>Send asset and network
+                  <select
+                    value={selectedFromCurrency?.id ?? ''}
+                    onChange={(event) => updateSelectedCurrency('from', event)}
+                    disabled={currenciesLoading || fromCurrencies.length === 0}
+                    required
+                  >
+                    <option value="" disabled>Select a crypto asset</option>
+                    {currencyGroups(fromCurrencies).map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.currencies.map((currency) => (
+                          <option key={currency.id} value={currency.id}>
+                            {currency.name} · {currency.ticker.toUpperCase()} · {currency.network.toUpperCase()}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </label>
+                <label>Receive asset and network
+                  <select
+                    value={selectedToCurrency?.id ?? ''}
+                    onChange={(event) => updateSelectedCurrency('to', event)}
+                    disabled={currenciesLoading || currencies.length === 0}
+                    required
+                  >
+                    <option value="" disabled>Select a crypto asset</option>
+                    {currencyGroups(currencies).map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.currencies.map((currency) => (
+                          <option key={currency.id} value={currency.id}>
+                            {currency.name} · {currency.ticker.toUpperCase()} · {currency.network.toUpperCase()}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </label>
                 <label>Amount<input name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
-                {form.fundingMethod === 'trust-wallet' && <label>Wallet chain ID<input name="chainId" inputMode="numeric" value={form.chainId} onChange={updateForm} required /></label>}
                 <label className="field-wide">Destination name<input name="destinationName" value={form.destinationName} onChange={updateForm} placeholder="Trust Wallet / PayPal" required /></label>
                 <label className="field-wide">Destination crypto address<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder="Wallet address supplied by the destination" required /></label>
-                <p className="field-note field-wide">Use a supported cryptocurrency address. A PayPal email or account ID is not a crypto deposit address. Wallet automation supports native EVM coins only.</p>
-                <div className="form-actions field-wide"><button className="button button-quiet" onClick={() => setShowNewPreset(false)} type="button">Cancel</button><button className="button button-primary" type="submit">Save route</button></div>
+                {selectedToCurrency?.hasExternalId && <label className="field-wide">Destination memo or tag<input name="destinationExtraId" value={form.destinationExtraId} onChange={updateForm} autoComplete="off" placeholder="Required by this asset" required /></label>}
+                <p className="field-note field-wide">Assets and networks come from ChangeNOW’s active standard-flow catalog. The selected pair is checked for availability when you request a quote. Destination must be a crypto address, not a PayPal email. Wallet automation is limited to supported native EVM coins.</p>
+                <div className="form-actions field-wide"><button className="button button-quiet" onClick={() => setShowNewPreset(false)} type="button">Cancel</button><button className="button button-primary" disabled={currenciesLoading || currencies.length === 0} type="submit">Save route</button></div>
               </form>
             </section>
           )}
@@ -339,6 +467,7 @@ export default function SwapEngine({ user }) {
               <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap tunnel ready</h2></div><span className="live-badge">LIVE</span></div>
               <p className="field-note">Send only {selectedPreset?.fromCurrency?.toUpperCase()} on {selectedPreset?.fromNetwork}. Sending another asset or network can permanently lose funds.</p>
               <div className="deposit-address"><span>Deposit address</span><code>{tunnel.payinAddress}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinAddress)} type="button">Copy address</button></div>
+              {tunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{tunnel.payinExtraId}</code><button className="button button-quiet" onClick={() => navigator.clipboard?.writeText(tunnel.payinExtraId)} type="button">Copy memo</button></div>}
               {tunnel.transactionHash && <div className="transaction-hash"><span>Wallet transaction</span><code>{tunnel.transactionHash}</code></div>}
               {tunnel.id && <p className="field-note">Exchange ID: {tunnel.id}</p>}
             </section>
@@ -358,6 +487,7 @@ export default function SwapEngine({ user }) {
               <div><dt>Estimated receive</dt><dd>{quote.estimatedAmount} {selectedPreset.toCurrency?.toUpperCase()}</dd></div>
               <div><dt>Minimum send</dt><dd>{quote.minimumAmount} {selectedPreset.fromCurrency?.toUpperCase()}</dd></div>
               <div><dt>Destination</dt><dd>{selectedPreset.destinationName}<br /><code>{selectedPreset.destinationAddress}</code></dd></div>
+              {selectedPreset.destinationExtraId && <div><dt>Memo or tag</dt><dd><code>{selectedPreset.destinationExtraId}</code></dd></div>}
             </dl>
             {quote.warningMessage && <p className="modal-warning">{quote.warningMessage}</p>}
             <p className="modal-warning">This standard-flow estimate is indicative and may change. Confirming creates the exchange; your wallet will separately ask approval before sending any funds.</p>

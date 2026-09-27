@@ -3,6 +3,7 @@ const { defineSecret } = require('firebase-functions/params')
 const { initializeApp } = require('firebase-admin/app')
 const { getFirestore, Timestamp } = require('firebase-admin/firestore')
 const { quoteMatchesExchange, quoteExpired } = require('./quote-validation')
+const { normalizeCurrencyCatalog } = require('./currency-catalog')
 
 initializeApp()
 
@@ -12,6 +13,9 @@ const CHANGE_NOW_URL = 'https://api.changenow.io/v2/exchange'
 const QUOTE_COOLDOWN_MS = 2000
 const CREATE_COOLDOWN_MS = 10000
 const QUOTE_TTL_MS = 60000
+const CURRENCY_CACHE_TTL_MS = 300000
+let cachedCurrencies = null
+let cachedCurrenciesUntil = 0
 
 function requiredString(value, field, maxLength = 160) {
   if (typeof value !== 'string' || !value.trim() || value.length > maxLength) {
@@ -78,12 +82,13 @@ function validateExchangeRequest(data = {}) {
   const toNetwork = requiredString(data.toNetwork, 'toNetwork', 32).toLowerCase()
   const fromAmount = requiredString(data.fromAmount, 'fromAmount', 48)
   const toAddress = data.toAddress == null ? undefined : requiredString(data.toAddress, 'toAddress', 256)
+  const toExtraId = data.toExtraId == null ? '' : requiredString(data.toExtraId, 'toExtraId', 256)
 
   if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(fromAmount) || !Number.isFinite(Number(fromAmount)) || Number(fromAmount) <= 0) {
     throw new HttpsError('invalid-argument', 'Amount must be a positive decimal value.')
   }
 
-  return { fromCurrency, fromNetwork, toCurrency, toNetwork, fromAmount, toAddress }
+  return { fromCurrency, fromNetwork, toCurrency, toNetwork, fromAmount, toAddress, toExtraId }
 }
 
 function compareDecimalStrings(left, right) {
@@ -156,6 +161,26 @@ function buildQuery(exchange, includeAmount = false) {
   return parameters.toString()
 }
 
+exports.getSwapCurrencies = onCall(
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10 },
+  async (request) => {
+    assertVerifiedUser(request)
+    if (cachedCurrencies && Date.now() < cachedCurrenciesUntil) {
+      return { currencies: cachedCurrencies }
+    }
+
+    const response = await callChangeNow('/currencies?active=true&flow=standard')
+    const currencies = normalizeCurrencyCatalog(response)
+    if (currencies.length === 0) {
+      throw new HttpsError('unavailable', 'ChangeNOW returned no active crypto currencies.')
+    }
+
+    cachedCurrencies = currencies
+    cachedCurrenciesUntil = Date.now() + CURRENCY_CACHE_TTL_MS
+    return { currencies }
+  },
+)
+
 exports.getSwapQuote = onCall(
   { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10 },
   async (request) => {
@@ -224,6 +249,7 @@ exports.createSwapTunnel = onCall(
         toNetwork: exchange.toNetwork,
         fromAmount: exchange.fromAmount,
         toAddress,
+        ...(exchange.toExtraId ? { toExtraId: exchange.toExtraId } : {}),
         flow: 'standard',
         type: 'direct',
       },
@@ -237,6 +263,7 @@ exports.createSwapTunnel = onCall(
     return {
       id: result.id ?? result.exchangeId ?? null,
       payinAddress,
+      payinExtraId: result.payinExtraId ?? null,
       payoutAddress: result.payoutAddress ?? null,
       fromAmount: String(result.fromAmount ?? exchange.fromAmount),
       toAmount: result.toAmount == null ? null : String(result.toAmount),

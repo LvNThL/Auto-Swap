@@ -5,6 +5,7 @@ const EXCHANGE_FIELDS = [
   'toNetwork',
   'fromAmount',
   'toAddress',
+  'toExtraId',
 ]
 
 function quoteMatchesExchange(quote, exchange) {

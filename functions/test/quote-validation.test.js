@@ -9,6 +9,7 @@ const exchange = {
   toNetwork: 'btc',
   fromAmount: '0.25',
   toAddress: 'bc1q-destination',
+  toExtraId: '',
 }
 
 test('matches the exact route and destination from the quote', () => {
@@ -23,6 +24,7 @@ test('rejects a changed amount, pair, network, or destination', () => {
     toNetwork: 'ltc',
     fromAmount: '0.26',
     toAddress: 'different-address',
+    toExtraId: 'different-memo',
   })) {
     assert.equal(quoteMatchesExchange({ ...exchange }, { ...exchange, [field]: value }), false, field)
   }
