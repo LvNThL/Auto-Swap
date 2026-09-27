@@ -48,7 +48,6 @@
   --text-button-ink: #536e2c;
   --input-bg: #fff;
   --placeholder: #637067;
-  --asset-placeholder: var(--placeholder);
   --code-ink: #2c3a30;
   --green: #b7ef5a;
   --glyph-ink: #718f36;
@@ -297,7 +296,6 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   --surface-hover: rgba(255,255,255,.04);
   --input-bg: #19221c;
   --placeholder: #a2afa5;
-  --asset-placeholder: #d0d9d2;
   --code-ink: #e5ece5;
   --green: #b7ef5a;
   --glyph-ink: #c1e991;
