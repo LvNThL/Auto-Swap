@@ -530,7 +530,7 @@ export default function SwapEngine({ user }) {
               >
                 <span className="route-item-top"><span>{preset.name}</span><span className="route-dot" /></span>
                 <span className="route-item-path">{preset.fromCurrency?.toUpperCase()} <b>→</b> {preset.toCurrency?.toUpperCase()}</span>
-                <span className="route-item-mode">MANUAL DEPOSIT</span>
+                <span className="route-item-mode">MANUAL SWAP</span>
               </button>
             ))}
           </nav>
@@ -663,7 +663,6 @@ export default function SwapEngine({ user }) {
             <>
               <section className="route-summary">
                 <div className="summary-origin"><span className="summary-label">FROM</span><strong>{getSourceWalletName(selectedPreset)}</strong><small>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} · {selectedPreset.fromNetwork?.toUpperCase()}</small></div>
-                <div className="summary-connector"><span>ChangeNOW</span><div><i /><i /><i /><i /><i /></div></div>
                 <div className="summary-destination"><span className="summary-label">TO</span><strong>{getDestinationWalletName(selectedPreset)}</strong><small>{selectedPreset.toCurrency?.toUpperCase()} · {selectedPreset.toNetwork?.toUpperCase()}</small></div>
               </section>
               <section className="panel active-route-panel">

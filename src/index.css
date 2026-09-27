@@ -65,10 +65,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .summary-label { color: #89948c; font-family: 'IBM Plex Mono', monospace; font-size: 8px; }
 .summary-origin strong, .summary-destination strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .summary-origin small, .summary-destination small { color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 9px; }
-.summary-connector { display: grid; gap: 11px; color: #859087; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 8px; }
-.summary-connector div { display: flex; justify-content: space-between; align-items: center; }
-.summary-connector i { width: 5px; height: 5px; border-radius: 50%; background: #bac4ba; }
-.summary-connector i:first-child, .summary-connector i:last-child { background: #91c83c; }
 .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--paper); box-shadow: 0 8px 30px rgba(32,41,35,.035); }
 .active-route-panel { padding: 24px 26px 0; }
 .panel-heading { align-items: flex-start; }
@@ -186,7 +182,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .app-brand { gap: 7px; font-size: 13px; }
   .app-brand i { font-size: 10px; }
   .route-summary { grid-template-columns: minmax(0,1fr) 64px minmax(0,1fr); }
-  .summary-connector { font-size: 7px; }
   .preset-form { grid-template-columns: 1fr; }
   .field-wide { grid-column: auto; }
   .detail-grid { grid-template-columns: 1fr; }
