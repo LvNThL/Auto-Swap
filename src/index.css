@@ -31,7 +31,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .brand-copy { display: grid; gap: 2px; }
 .brand-copy strong { font-size: 14px; line-height: 1.1; }
 .brand-copy small { color: var(--muted); font-size: 10px; font-weight: 500; line-height: 1.1; }
-.brand-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; color: var(--green); background: var(--ink); font-size: 24px; line-height: 1; }
+.brand-mark { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 9px; color: #b7ef5a; background: #202923; font-size: 24px; line-height: 1; }
 .account-menu { display: flex; align-items: center; gap: 19px; }
 .account-email { color: var(--muted); font-size: 12px; }
 .theme-selector { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; font-weight: 600; white-space: nowrap; }
@@ -228,6 +228,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 :root[data-theme='dark'] .icon-button,
 :root[data-theme='dark'] .theme-selector select { border-color: var(--line); background: #28332c; color: var(--ink); }
 :root[data-theme='dark'] .button-primary { color: #202923; }
+:root[data-theme='dark'] .brand-mark { border-color: #dce5dc; }
 :root[data-theme='dark'] .button-quiet:hover:not(:disabled) { background: #344138; }
 :root[data-theme='dark'] .panel-footer,
 :root[data-theme='dark'] .history-item,
