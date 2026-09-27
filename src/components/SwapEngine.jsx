@@ -539,7 +539,7 @@ export default function SwapEngine({ user }) {
 
         <section className="desk-content">
           <div className="page-heading">
-            <div><p className="eyebrow">SWAP AUTOMATION / PERSONAL</p><h1>Route Desk</h1></div>
+            <div><p className="eyebrow">POWERED BY CHANGENOW</p><h1>Route Desk</h1></div>
             {selectedPreset && <button className="button button-quiet delete-button" onClick={removePreset} type="button">Delete route</button>}
           </div>
 
