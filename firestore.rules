@@ -1,19 +1,29 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isVerifiedOwner(userId) {
+      return request.auth != null
+        && request.auth.uid == userId
+        && request.auth.token.email_verified == true;
+    }
+
     match /users/{userId}/presets/{presetId} {
-      allow read, create, update, delete: if request.auth != null
-        && request.auth.uid == userId;
+      allow read: if isVerifiedOwner(userId);
+      allow write: if false;
     }
 
     match /users/{userId}/addressBook/{entryId} {
-      allow read, create, update, delete: if request.auth != null
-        && request.auth.uid == userId;
+      allow read: if isVerifiedOwner(userId);
+      allow write: if false;
     }
 
     match /users/{userId}/swapHistory/{swapId} {
-      allow read: if request.auth != null && request.auth.uid == userId;
+      allow read: if isVerifiedOwner(userId);
       allow write: if false;
+    }
+
+    match /users/{userId}/_privateMeta/{metadataId} {
+      allow read, write: if false;
     }
   }
 }

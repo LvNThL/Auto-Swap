@@ -399,8 +399,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       })
       setAddressBookEntries(await listAddressBookEntries(user.uid))
       setAddressBookDialog('')
-    } catch {
-      setAddressBookError('Address could not be saved. Check your connection and Firestore rules.')
+    } catch (saveError) {
+      setAddressBookError(getErrorMessage(saveError))
     } finally {
       setAddressBookBusy(false)
     }
@@ -413,8 +413,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     try {
       await deleteAddressBookEntry(user.uid, entry.id)
       setAddressBookEntries((entries) => entries.filter((savedEntry) => savedEntry.id !== entry.id))
-    } catch {
-      setAddressBookError('Address could not be removed. Check your connection and try again.')
+    } catch (removeError) {
+      setAddressBookError(getErrorMessage(removeError))
     } finally {
       setAddressBookBusy(false)
     }

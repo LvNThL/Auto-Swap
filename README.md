@@ -29,3 +29,10 @@ For WalletConnect, create a WalletConnect Cloud project and set `VITE_WALLETCONN
 ## Static hosting
 
 The GitHub Actions workflow builds the PWA with the repository path as Vite's base URL and deploys `dist` to GitHub Pages. Add the `VITE_FIREBASE_*` values and WalletConnect project ID as repository Actions secrets, then enable GitHub Pages with GitHub Actions as its source. Firebase Functions deploy separately; never add the ChangeNOW secret to Vite environment variables or GitHub Pages.
+
+## Firebase cost controls
+
+- Callable functions require a signed-in, email-verified account and are capped at five instances each to limit burst scaling.
+- Saved records are validated server-side and capped at 25 presets and 50 address-book entries per account. The app-wide ceiling is 250 saved-record creates or edits per UTC day; deletes remain available.
+- Quote documents include an `expiresAt` timestamp, but Firestore does not delete them automatically until a TTL policy is enabled. In Google Cloud Console, open Firestore's Time-to-live page and create a policy for collection group `swapQuotes` using field `expiresAt`. TTL deletion is asynchronous (typically within 24 hours) and billed as document deletes.
+- Swap history is retained to preserve user history; each history read is limited to the latest 50 records. Configure billing budget alerts in Google Cloud Billing because alerts notify but do not cap spending.

@@ -1,15 +1,14 @@
 import {
-  addDoc,
   collection,
-  deleteDoc,
-  doc,
   getDocs,
+  limit,
   orderBy,
   query,
-  serverTimestamp,
-  updateDoc,
 } from 'firebase/firestore'
-import { db } from '../firebase.js'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from '../firebase.js'
+
+const MAX_PRESETS_TO_LOAD = 26
 
 function presetsCollection(uid) {
   if (!uid) throw new Error('Sign in before accessing saved routes.')
@@ -17,27 +16,25 @@ function presetsCollection(uid) {
 }
 
 export async function listPresets(uid) {
-  const snapshot = await getDocs(query(presetsCollection(uid), orderBy('updatedAt', 'desc')))
+  const snapshot = await getDocs(query(presetsCollection(uid), orderBy('updatedAt', 'desc'), limit(MAX_PRESETS_TO_LOAD)))
   return snapshot.docs.map((presetDoc) => ({ id: presetDoc.id, ...presetDoc.data() }))
 }
 
 export async function createPreset(uid, preset) {
-  const now = serverTimestamp()
-  const reference = await addDoc(presetsCollection(uid), {
-    ...preset,
-    createdAt: now,
-    updatedAt: now,
-  })
-  return reference.id
+  if (!uid) throw new Error('Sign in before accessing saved routes.')
+  const save = httpsCallable(functions, 'saveUserPreset')
+  const { data } = await save({ preset })
+  return data.id
 }
 
 export async function updatePreset(uid, presetId, changes) {
-  await updateDoc(doc(db, 'users', uid, 'presets', presetId), {
-    ...changes,
-    updatedAt: serverTimestamp(),
-  })
+  if (!uid) throw new Error('Sign in before accessing saved routes.')
+  const save = httpsCallable(functions, 'saveUserPreset')
+  await save({ presetId, preset: changes })
 }
 
 export async function deletePreset(uid, presetId) {
-  await deleteDoc(doc(db, 'users', uid, 'presets', presetId))
+  if (!uid) throw new Error('Sign in before accessing saved routes.')
+  const remove = httpsCallable(functions, 'deleteUserPreset')
+  await remove({ presetId })
 }

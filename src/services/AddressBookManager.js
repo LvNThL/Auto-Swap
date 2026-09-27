@@ -1,15 +1,14 @@
 import {
-  addDoc,
   collection,
-  deleteDoc,
-  doc,
   getDocs,
+  limit,
   orderBy,
   query,
-  serverTimestamp,
-  updateDoc,
 } from 'firebase/firestore'
-import { db } from '../firebase.js'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from '../firebase.js'
+
+const MAX_ADDRESS_BOOK_ENTRIES_TO_LOAD = 51
 
 function addressBookCollection(uid) {
   if (!uid) throw new Error('Sign in before accessing saved addresses.')
@@ -17,27 +16,25 @@ function addressBookCollection(uid) {
 }
 
 export async function listAddressBookEntries(uid) {
-  const snapshot = await getDocs(query(addressBookCollection(uid), orderBy('label', 'asc')))
+  const snapshot = await getDocs(query(addressBookCollection(uid), orderBy('label', 'asc'), limit(MAX_ADDRESS_BOOK_ENTRIES_TO_LOAD)))
   return snapshot.docs.map((entryDoc) => ({ id: entryDoc.id, ...entryDoc.data() }))
 }
 
 export async function createAddressBookEntry(uid, entry) {
-  const now = serverTimestamp()
-  const reference = await addDoc(addressBookCollection(uid), {
-    ...entry,
-    createdAt: now,
-    updatedAt: now,
-  })
-  return reference.id
+  if (!uid) throw new Error('Sign in before accessing saved addresses.')
+  const save = httpsCallable(functions, 'saveUserAddressBookEntry')
+  const { data } = await save({ entry })
+  return data.id
 }
 
 export async function updateAddressBookEntry(uid, entryId, changes) {
-  await updateDoc(doc(db, 'users', uid, 'addressBook', entryId), {
-    ...changes,
-    updatedAt: serverTimestamp(),
-  })
+  if (!uid) throw new Error('Sign in before accessing saved addresses.')
+  const save = httpsCallable(functions, 'saveUserAddressBookEntry')
+  await save({ entryId, entry: changes })
 }
 
 export async function deleteAddressBookEntry(uid, entryId) {
-  await deleteDoc(doc(db, 'users', uid, 'addressBook', entryId))
+  if (!uid) throw new Error('Sign in before accessing saved addresses.')
+  const remove = httpsCallable(functions, 'deleteUserAddressBookEntry')
+  await remove({ entryId })
 }

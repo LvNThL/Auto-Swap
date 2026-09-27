@@ -4,6 +4,13 @@ const { initializeApp } = require('firebase-admin/app')
 const { getFirestore, Timestamp } = require('firebase-admin/firestore')
 const { quoteMatchesExchange, quoteExpired } = require('./quote-validation')
 const { normalizeCurrencyCatalog } = require('./currency-catalog')
+const {
+  MAX_ADDRESS_BOOK_ENTRIES_PER_USER,
+  MAX_DAILY_SAVED_RECORD_WRITES,
+  MAX_PRESETS_PER_USER,
+  validateAddressBookEntry,
+  validatePreset,
+} = require('./saved-record-validation')
 
 initializeApp()
 
@@ -14,6 +21,7 @@ const QUOTE_COOLDOWN_MS = 2000
 const CREATE_COOLDOWN_MS = 10000
 const QUOTE_TTL_MS = 60000
 const CURRENCY_CACHE_TTL_MS = 300000
+const SAVED_RECORD_WRITE_COOLDOWN_MS = 1000
 let cachedCurrencies = null
 let cachedCurrenciesUntil = 0
 
@@ -58,6 +66,163 @@ function serializeSwapHistory(snapshot) {
     createdAt: record.createdAt?.toMillis() ?? null,
     updatedAt: record.updatedAt?.toMillis() ?? null,
   }
+}
+
+function getUserRecordUsageRef(uid) {
+  return database.collection('users').doc(uid).collection('_privateMeta').doc('recordUsage')
+}
+
+function recordCountFromSnapshot(snapshot, maximum) {
+  return {
+    count: Math.min(snapshot.size, maximum + 1),
+    overflow: snapshot.size > maximum,
+  }
+}
+
+async function readInitialRecordUsage(transaction, uid, presetSnapshot = null, addressSnapshot = null) {
+  const userRef = database.collection('users').doc(uid)
+  const [presets, addresses] = await Promise.all([
+    presetSnapshot ?? transaction.get(userRef.collection('presets').limit(MAX_PRESETS_PER_USER + 1)),
+    addressSnapshot ?? transaction.get(userRef.collection('addressBook').limit(MAX_ADDRESS_BOOK_ENTRIES_PER_USER + 1)),
+  ])
+  const presetCount = recordCountFromSnapshot(presets, MAX_PRESETS_PER_USER)
+  const addressCount = recordCountFromSnapshot(addresses, MAX_ADDRESS_BOOK_ENTRIES_PER_USER)
+
+  return {
+    presetCount: presetCount.count,
+    presetOverflow: presetCount.overflow,
+    addressCount: addressCount.count,
+    addressOverflow: addressCount.overflow,
+  }
+}
+
+function getCountAfterDelete(count, overflow, snapshotSize, maximum) {
+  if (overflow || count > maximum) {
+    if (snapshotSize <= maximum + 1) return { count: Math.max(0, snapshotSize - 1), overflow: false }
+    return { count: maximum + 1, overflow: true }
+  }
+  return { count: Math.max(0, count - 1), overflow: false }
+}
+
+function validateSavedRecord(validator, input) {
+  try {
+    return validator(input)
+  } catch (error) {
+    throw new HttpsError('invalid-argument', error.message)
+  }
+}
+
+function requiredRecordId(value, field) {
+  const id = requiredString(value, field, 128)
+  if (!/^[A-Za-z0-9]+$/.test(id)) throw new HttpsError('invalid-argument', `Invalid ${field}.`)
+  return id
+}
+
+async function assertSavedRecordDailyCapacity(globalUsageRef) {
+  const day = new Date().toISOString().slice(0, 10)
+  const snapshot = await globalUsageRef.get()
+  const usage = snapshot.data()
+  if (usage?.day === day && usage.count >= MAX_DAILY_SAVED_RECORD_WRITES) {
+    throw new HttpsError('resource-exhausted', 'The app-wide daily saved-record limit has been reached. Try again tomorrow.')
+  }
+}
+
+async function saveUserRecord(uid, collectionName, record, maximum, countField, recordId = '') {
+  const collectionRef = database.collection('users').doc(uid).collection(collectionName)
+  const recordRef = recordId ? collectionRef.doc(recordId) : collectionRef.doc()
+  const usageRef = getUserRecordUsageRef(uid)
+  const globalUsageRef = database.collection('_swapGlobalLimits').doc('savedRecordWrites')
+  await assertSavedRecordDailyCapacity(globalUsageRef)
+  if (recordId && !(await recordRef.get()).exists) throw new HttpsError('not-found', 'Saved record not found.')
+  await enforceRequestCooldown(uid, 'saved-record-write', SAVED_RECORD_WRITE_COOLDOWN_MS)
+  const now = Date.now()
+  const day = new Date(now).toISOString().slice(0, 10)
+
+  await database.runTransaction(async (transaction) => {
+    const [recordSnapshot, usageSnapshot, globalUsageSnapshot] = await Promise.all([
+      transaction.get(recordRef),
+      transaction.get(usageRef),
+      transaction.get(globalUsageRef),
+    ])
+
+    if (recordId && !recordSnapshot.exists) throw new HttpsError('not-found', 'Saved record not found.')
+
+    const usage = usageSnapshot.exists
+      ? usageSnapshot.data()
+      : recordId ? null : await readInitialRecordUsage(transaction, uid)
+    if (!recordId && usage[countField] >= maximum) {
+      throw new HttpsError('resource-exhausted', `This account has reached its limit of ${maximum} saved records in this category. Delete an unused record before adding another.`)
+    }
+
+    const globalUsage = globalUsageSnapshot.data()
+    const dailyCount = globalUsage?.day === day ? globalUsage.count : 0
+    if (dailyCount >= MAX_DAILY_SAVED_RECORD_WRITES) {
+      throw new HttpsError('resource-exhausted', 'The app-wide daily saved-record limit has been reached. Try again tomorrow.')
+    }
+
+    if (recordId) {
+      const createdAt = recordSnapshot.data().createdAt instanceof Timestamp
+        ? recordSnapshot.data().createdAt
+        : Timestamp.fromMillis(now)
+      transaction.set(recordRef, { ...record, createdAt, updatedAt: Timestamp.fromMillis(now) })
+    } else {
+      transaction.create(recordRef, {
+        ...record,
+        createdAt: Timestamp.fromMillis(now),
+        updatedAt: Timestamp.fromMillis(now),
+      })
+      transaction.set(usageRef, {
+        ...usage,
+        [countField]: usage[countField] + 1,
+        [`${countField === 'presetCount' ? 'preset' : 'address'}Overflow`]: false,
+      })
+    }
+
+    transaction.set(globalUsageRef, { day, count: dailyCount + 1, updatedAt: Timestamp.fromMillis(now) })
+  })
+
+  return recordRef.id
+}
+
+async function deleteUserRecord(uid, collectionName, maximum, countField, recordId) {
+  const userRef = database.collection('users').doc(uid)
+  const collectionRef = userRef.collection(collectionName)
+  const recordRef = collectionRef.doc(recordId)
+  const usageRef = getUserRecordUsageRef(uid)
+  if (!(await recordRef.get()).exists) throw new HttpsError('not-found', 'Saved record not found.')
+  await enforceRequestCooldown(uid, 'saved-record-write', SAVED_RECORD_WRITE_COOLDOWN_MS)
+
+  await database.runTransaction(async (transaction) => {
+    const [recordSnapshot, usageSnapshot, recordListSnapshot] = await Promise.all([
+      transaction.get(recordRef),
+      transaction.get(usageRef),
+      transaction.get(collectionRef.limit(maximum + 2)),
+    ])
+    if (!recordSnapshot.exists) throw new HttpsError('not-found', 'Saved record not found.')
+
+    const usage = usageSnapshot.exists
+      ? usageSnapshot.data()
+      : await readInitialRecordUsage(
+        transaction,
+        uid,
+        collectionName === 'presets' ? recordListSnapshot : null,
+        collectionName === 'addressBook' ? recordListSnapshot : null,
+      )
+    const isPreset = collectionName === 'presets'
+    const countResult = getCountAfterDelete(
+      usage[countField] ?? 0,
+      usage[isPreset ? 'presetOverflow' : 'addressOverflow'] === true,
+      recordListSnapshot.size,
+      maximum,
+    )
+
+    transaction.delete(recordRef)
+    transaction.set(usageRef, {
+      ...usage,
+      [countField]: countResult.count,
+      [isPreset ? 'presetOverflow' : 'addressOverflow']: countResult.overflow,
+    })
+  })
 }
 
 const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired'])
@@ -220,7 +385,7 @@ function buildQuery(exchange, includeAmount = false) {
 }
 
 exports.getSwapCurrencies = onCall(
-  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
     if (cachedCurrencies && Date.now() < cachedCurrenciesUntil) {
@@ -240,7 +405,7 @@ exports.getSwapCurrencies = onCall(
 )
 
 exports.getSwapMinimum = onCall(
-  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
     const exchange = {
@@ -261,7 +426,7 @@ exports.getSwapMinimum = onCall(
 )
 
 exports.getSwapQuote = onCall(
-  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
     const exchange = validateExchangeRequest(request.data)
@@ -312,7 +477,7 @@ exports.getSwapQuote = onCall(
 )
 
 exports.createSwapTunnel = onCall(
-  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
     const exchange = validateExchangeRequest(request.data)
@@ -376,7 +541,7 @@ exports.createSwapTunnel = onCall(
 )
 
 exports.getSwapHistory = onCall(
-  { region: 'us-central1', maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  { region: 'us-central1', maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
     const snapshot = await swapHistoryCollection(request.auth.uid)
@@ -389,7 +554,7 @@ exports.getSwapHistory = onCall(
 )
 
 exports.refreshSwapStatus = onCall(
-  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 10, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
+  { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
     const exchangeId = requiredString(request.data?.exchangeId, 'exchangeId', 128)
@@ -424,3 +589,54 @@ exports.refreshSwapStatus = onCall(
     return serializeSwapHistory(updatedSnapshot)
   },
 )
+
+const savedRecordCallOptions = {
+  region: 'us-central1',
+  maxInstances: 5,
+  invoker: 'public',
+  cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'],
+}
+
+exports.saveUserPreset = onCall(savedRecordCallOptions, async (request) => {
+  assertVerifiedUser(request)
+  const preset = validateSavedRecord(validatePreset, request.data?.preset)
+  const presetId = request.data?.presetId == null ? '' : requiredRecordId(request.data.presetId, 'presetId')
+  const id = await saveUserRecord(
+    request.auth.uid,
+    'presets',
+    preset,
+    MAX_PRESETS_PER_USER,
+    'presetCount',
+    presetId,
+  )
+  return { id }
+})
+
+exports.deleteUserPreset = onCall(savedRecordCallOptions, async (request) => {
+  assertVerifiedUser(request)
+  const presetId = requiredRecordId(request.data?.presetId, 'presetId')
+  await deleteUserRecord(request.auth.uid, 'presets', MAX_PRESETS_PER_USER, 'presetCount', presetId)
+  return { deleted: true }
+})
+
+exports.saveUserAddressBookEntry = onCall(savedRecordCallOptions, async (request) => {
+  assertVerifiedUser(request)
+  const entry = validateSavedRecord(validateAddressBookEntry, request.data?.entry)
+  const entryId = request.data?.entryId == null ? '' : requiredRecordId(request.data.entryId, 'entryId')
+  const id = await saveUserRecord(
+    request.auth.uid,
+    'addressBook',
+    entry,
+    MAX_ADDRESS_BOOK_ENTRIES_PER_USER,
+    'addressCount',
+    entryId,
+  )
+  return { id }
+})
+
+exports.deleteUserAddressBookEntry = onCall(savedRecordCallOptions, async (request) => {
+  assertVerifiedUser(request)
+  const entryId = requiredRecordId(request.data?.entryId, 'entryId')
+  await deleteUserRecord(request.auth.uid, 'addressBook', MAX_ADDRESS_BOOK_ENTRIES_PER_USER, 'addressCount', entryId)
+  return { deleted: true }
+})
