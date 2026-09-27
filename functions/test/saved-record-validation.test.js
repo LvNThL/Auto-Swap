@@ -41,12 +41,25 @@ test('defines conservative per-user and project-wide record quotas', () => {
 test('trims preset text and canonicalizes currency/network identifiers', () => {
   assert.deepEqual(validatePreset(validPreset), {
     ...validPreset,
+    name: 'FIL (FIL) to USDT (BSC)',
     sourceName: 'Source wallet',
     fromCurrency: 'fil',
     fromNetwork: 'fil',
     toCurrency: 'usdt',
     toNetwork: 'bsc',
   })
+})
+
+test('generates preset names from the selected assets and ignores custom labels', () => {
+  assert.equal(validatePreset({ ...validPreset, name: 'Personal label' }).name, 'FIL (FIL) to USDT (BSC)')
+  assert.equal(validatePreset({ ...validPreset, name: '' }).name, 'FIL (FIL) to USDT (BSC)')
+  assert.equal(validatePreset({
+    ...validPreset,
+    fromCurrency: 'USDT',
+    fromNetwork: 'BSC',
+    toCurrency: 'USDT',
+    toNetwork: 'ETH',
+  }).name, 'USDT (BSC) to USDT (ETH)')
 })
 
 test('rejects preset fields that are not part of the stored schema', () => {
@@ -61,7 +74,7 @@ test('rejects invalid, zero, and non-decimal preset amounts', () => {
 
 test('rejects oversized preset addresses and missing required fields', () => {
   assert.throws(() => validatePreset({ ...validPreset, destinationAddress: 'x'.repeat(257) }), /destinationAddress/)
-  assert.throws(() => validatePreset({ ...validPreset, name: ' ' }), /name/)
+  assert.throws(() => validatePreset({ ...validPreset, destinationAddress: '' }), /destinationAddress/)
 })
 
 test('normalizes valid address-book entries and rejects invalid purpose or extra fields', () => {

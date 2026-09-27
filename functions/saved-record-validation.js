@@ -3,7 +3,7 @@ const MAX_ADDRESS_BOOK_ENTRIES_PER_USER = 50
 const MAX_DAILY_SAVED_RECORD_WRITES = 250
 
 const presetSchema = {
-  name: { maxLength: 48, required: true },
+  name: { maxLength: 138 },
   sourceName: { maxLength: 48 },
   fromCurrency: { maxLength: 32, required: true, lowercase: true },
   fromNetwork: { maxLength: 32, required: true, lowercase: true },
@@ -53,6 +53,10 @@ function validatePreset(input) {
     !Number.isFinite(Number(preset.fromAmount)) || Number(preset.fromAmount) <= 0) {
     throw new Error('Invalid fromAmount.')
   }
+  const formatAsset = (currency, network) => network
+    ? `${currency.toUpperCase()} (${network.toUpperCase()})`
+    : currency.toUpperCase()
+  preset.name = `${formatAsset(preset.fromCurrency, preset.fromNetwork)} to ${formatAsset(preset.toCurrency, preset.toNetwork)}`
   return preset
 }
 

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { signOut } from 'firebase/auth'
 import Select from 'react-select'
 import { auth, functions, isFirebaseConfigured } from '../firebase.js'
+import BrandMark from './BrandMark.jsx'
 import InstallAppControl from './InstallAppControl.jsx'
 import ThemeSelector from './ThemeSelector.jsx'
 import {
@@ -13,7 +14,6 @@ import {
 import { createPreset, deletePreset, listPresets, updatePreset } from '../services/PresetManager.js'
 
 const emptyPreset = {
-  name: '',
   sourceName: '',
   fromCurrency: 'btc',
   fromNetwork: 'btc',
@@ -40,7 +40,7 @@ const assetSelectStyles = {
   control: (base, state) => ({
     ...base,
     minHeight: 42,
-    borderColor: state.isFocused ? '#739a32' : 'var(--line)',
+    borderColor: state.isFocused ? 'var(--green)' : 'var(--line)',
     backgroundColor: 'var(--paper)',
     color: 'var(--ink)',
     borderRadius: 5,
@@ -48,6 +48,7 @@ const assetSelectStyles = {
     fontSize: 12,
     ':hover': { borderColor: 'var(--muted)' },
   }),
+  placeholder: (base) => ({ ...base, color: 'var(--placeholder)' }),
   menuPortal: (base) => ({ ...base, zIndex: 30 }),
   menu: (base) => ({ ...base, zIndex: 30, overflow: 'hidden', border: '1px solid var(--line)', borderRadius: 6, backgroundColor: 'var(--paper)' }),
   menuList: (base) => ({ ...base, maxHeight: 260, overflowY: 'auto', scrollbarWidth: 'thin' }),
@@ -94,12 +95,22 @@ function searchCurrencies(currencies, query) {
 }
 
 function getSourceWalletName(preset) {
-  return preset.sourceName?.trim() || 'Source wallet'
+  return preset.sourceName?.trim() || 'Source Wallet'
 }
 
 function getDestinationWalletName(preset) {
-  if (typeof preset.sourceName === 'undefined') return 'Destination wallet'
-  return preset.destinationName?.trim() || 'Destination wallet'
+  if (typeof preset.sourceName === 'undefined') return 'Destination Wallet'
+  return preset.destinationName?.trim() || 'Destination Wallet'
+}
+
+function getPresetName(preset) {
+  const fromCurrency = String(preset.fromCurrency ?? '').toUpperCase()
+  const toCurrency = String(preset.toCurrency ?? '').toUpperCase()
+  const fromNetwork = String(preset.fromNetwork ?? '').toUpperCase()
+  const toNetwork = String(preset.toNetwork ?? '').toUpperCase()
+  const fromAsset = fromCurrency && fromNetwork ? `${fromCurrency} (${fromNetwork})` : fromCurrency
+  const toAsset = toCurrency && toNetwork ? `${toCurrency} (${toNetwork})` : toCurrency
+  return `${fromAsset} to ${toAsset}`
 }
 
 function getErrorMessage(error) {
@@ -113,7 +124,8 @@ function formatSwapStatus(status) {
   return String(status || 'unknown').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
-const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired'])
+const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
+const depositReceivedStatuses = new Set(['confirming', 'exchanging', 'sending', 'finished', 'failed', 'refunded'])
 
 export default function SwapEngine({ user, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed }) {
   const [presets, setPresets] = useState([])
@@ -136,18 +148,55 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [editingPresetId, setEditingPresetId] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [quote, setQuote] = useState(null)
   const [tunnel, setTunnel] = useState(null)
   const [tunnelPreset, setTunnelPreset] = useState(null)
   const [swapHistory, setSwapHistory] = useState([])
+  const [pendingSwaps, setPendingSwaps] = useState([])
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
   const [refreshingSwapId, setRefreshingSwapId] = useState('')
   const [copyToast, setCopyToast] = useState(null)
+  const settingsMenuRef = useRef(null)
+  const settingsButtonRef = useRef(null)
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
+  const persistedTunnel = pendingSwaps
+    .filter((swap) => swap.presetId === selectedId && swap.payinAddress)
+    .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))[0]
+  const localTunnelSelected = tunnel?.presetId === selectedId
+  const activeTunnel = localTunnelSelected
+    ? tunnel
+    : persistedTunnel
+      ? {
+        id: persistedTunnel.exchangeId,
+        payinAddress: persistedTunnel.payinAddress,
+        payinExtraId: persistedTunnel.payinExtraId,
+        presetId: persistedTunnel.presetId,
+      }
+      : null
+  const activeTunnelPreset = localTunnelSelected
+    ? tunnelPreset
+    : persistedTunnel
+      ? {
+        sourceName: persistedTunnel.sourceName,
+        fromCurrency: persistedTunnel.fromCurrency,
+        fromNetwork: persistedTunnel.fromNetwork,
+      }
+      : null
+  const visibleSwapHistory = [
+    ...swapHistory.filter((swap) => depositReceivedStatuses.has(String(swap.status || '').toLowerCase())),
+    ...pendingSwaps.map((swap) => ({
+      ...swap,
+      id: swap.id ?? swap.exchangeId,
+      toAmount: swap.estimatedAmount ?? null,
+      status: swap.status || 'waiting',
+      pending: true,
+    })),
+  ].sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
   const fromCurrencies = currencies.filter((currency) => currency.canSell)
   const toCurrencies = currencies.filter((currency) => currency.canBuy)
   const fromSearchLower = fromSearch.trim().toLowerCase()
@@ -171,14 +220,15 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     const getHistory = httpsCallable(functions, 'getSwapHistory')
     const { data } = await getHistory({})
     setSwapHistory(data.swaps ?? [])
+    setPendingSwaps(data.pendingSwaps ?? [])
   }
 
-  async function copyToClipboard(value, label) {
+  async function copyToClipboard(value, label, target) {
     try {
       await navigator.clipboard.writeText(value)
-      setCopyToast({ message: `${label} copied` })
+      setCopyToast({ message: `${label} copied`, target })
     } catch {
-      setCopyToast({ message: 'Clipboard access is unavailable' })
+      setCopyToast({ message: 'Clipboard access is unavailable', target: '' })
     }
   }
 
@@ -188,9 +238,17 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     try {
       const refresh = httpsCallable(functions, 'refreshSwapStatus')
       const { data } = await refresh({ exchangeId })
-      setSwapHistory((current) => current.map((swap) => swap.exchangeId === exchangeId ? data : swap))
-    } catch (statusError) {
-      setHistoryError(`Status could not be refreshed. The saved swap is still in your history. ${getErrorMessage(statusError)}`)
+      if (data.pending) {
+        setPendingSwaps((current) => current.map((swap) => swap.exchangeId === exchangeId ? { ...swap, ...data } : swap))
+      } else {
+        setSwapHistory((current) => current.some((swap) => swap.exchangeId === exchangeId)
+          ? current.map((swap) => swap.exchangeId === exchangeId ? data : swap)
+          : [data, ...current])
+        setPendingSwaps((current) => current.filter((swap) => swap.exchangeId !== exchangeId))
+        setTunnel((current) => current?.id === exchangeId ? null : current)
+      }
+    } catch {
+      setHistoryError("We couldn't refresh this swap's status right now. It's still in your history. Please try again in a moment.")
     } finally {
       setRefreshingSwapId('')
     }
@@ -203,6 +261,27 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   }, [copyToast])
 
   useEffect(() => {
+    if (!settingsOpen) return undefined
+
+    function closeOnPointerDown(event) {
+      if (!settingsMenuRef.current?.contains(event.target)) setSettingsOpen(false)
+    }
+
+    function closeOnEscape(event) {
+      if (event.key !== 'Escape') return
+      setSettingsOpen(false)
+      settingsButtonRef.current?.focus()
+    }
+
+    document.addEventListener('pointerdown', closeOnPointerDown)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [settingsOpen])
+
+  useEffect(() => {
     let active = true
     let polling = false
     let pollOffset = 0
@@ -212,9 +291,12 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     async function loadHistory() {
       try {
         const { data } = await getHistory({})
-        if (active) setSwapHistory(data.swaps ?? [])
+        if (active) {
+          setSwapHistory(data.swaps ?? [])
+          setPendingSwaps(data.pendingSwaps ?? [])
+        }
       } catch {
-        if (active) setHistoryError('Swap history could not be loaded.')
+        if (active) setHistoryError("We couldn't load exchange activity just now. This doesn't mean your swap failed. Please refresh in a moment.")
       } finally {
         if (active) setHistoryLoading(false)
       }
@@ -226,9 +308,12 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       try {
         const { data } = await getHistory({})
         const swaps = data.swaps ?? []
+        const waitingForDeposit = data.pendingSwaps ?? []
         if (!active) return
         setSwapHistory(swaps)
-        const pending = swaps.filter((swap) => swap.exchangeId && !terminalSwapStatuses.has(String(swap.status).toLowerCase()))
+        setPendingSwaps(waitingForDeposit)
+        const outstandingHistory = swaps.filter((swap) => swap.exchangeId && !terminalSwapStatuses.has(String(swap.status).toLowerCase()))
+        const pending = [...outstandingHistory, ...waitingForDeposit.filter((swap) => swap.exchangeId)]
         const batch = pending.slice(pollOffset, pollOffset + 5)
         pollOffset = pending.length ? (pollOffset + batch.length) % pending.length : 0
         const refreshed = await Promise.all(batch.map(async (swap) => {
@@ -239,8 +324,22 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           }
         }))
         if (active) {
-          const updated = new Map(refreshed.filter(Boolean).map((swap) => [swap.exchangeId, swap]))
-          setSwapHistory((current) => current.map((swap) => updated.get(swap.exchangeId) ?? swap))
+          const updatedHistory = new Map(refreshed.filter((swap) => swap && !swap.pending && !swap.discarded)
+            .map((swap) => [swap.exchangeId, swap]))
+          setSwapHistory((current) => {
+            const merged = current.map((swap) => updatedHistory.get(swap.exchangeId) ?? swap)
+            const knownIds = new Set(merged.map((swap) => swap.exchangeId))
+            return [...merged, ...refreshed.filter((swap) => swap?.historyCreated && !knownIds.has(swap.exchangeId))]
+          })
+
+          const updatedPending = new Map(refreshed.filter((swap) => swap?.pending)
+            .map((swap) => [swap.exchangeId, swap]))
+          const removedPending = new Set(refreshed.filter((swap) => swap?.historyCreated || swap?.discarded)
+            .map((swap) => swap.exchangeId))
+          setTunnel((current) => current && removedPending.has(current.id) ? null : current)
+          setPendingSwaps((current) => current
+            .filter((swap) => !removedPending.has(swap.exchangeId))
+            .map((swap) => ({ ...swap, ...updatedPending.get(swap.exchangeId) })))
         }
       } catch {
       } finally {
@@ -423,7 +522,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   function beginEditPreset() {
     if (!selectedPreset) return
     setForm({
-      name: selectedPreset.name ?? '',
       sourceName: selectedPreset.sourceName ?? '',
       fromCurrency: selectedPreset.fromCurrency ?? emptyPreset.fromCurrency,
       fromNetwork: selectedPreset.fromNetwork ?? emptyPreset.fromNetwork,
@@ -445,6 +543,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setConfirming(false)
     setNotice('')
     setError('')
+    setHistoryError('')
     setShowNewPreset(true)
   }
 
@@ -455,6 +554,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setFromSearch('')
     setToSearch('')
     setError('')
+    setHistoryError('')
   }
 
   function toggleNewPreset() {
@@ -467,6 +567,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setFromSearch('')
     setToSearch('')
     setError('')
+    setNotice('')
+    setHistoryError('')
     setShowNewPreset(true)
   }
 
@@ -481,7 +583,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     try {
       const preset = {
         ...form,
-        name: form.name.trim(),
+        name: getPresetName(form),
         sourceName: form.sourceName.trim(),
         destinationName: form.destinationName.trim(),
         destinationAddress: form.destinationAddress.trim(),
@@ -512,7 +614,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   }
 
   async function removePreset() {
-    if (!selectedPreset || !window.confirm(`Delete “${selectedPreset.name}”?`)) return
+    if (!selectedPreset || !window.confirm(`Delete “${getPresetName(selectedPreset)}”?`)) return
     setError('')
     try {
       await deletePreset(user.uid, selectedPreset.id)
@@ -537,6 +639,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       refundAddress: preset.refundAddress,
       refundExtraId: preset.refundExtraId,
       quoteId,
+      presetId: preset.id,
     })
     return result.data
   }
@@ -560,6 +663,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         toExtraId: selectedPreset.destinationExtraId,
         refundAddress: selectedPreset.refundAddress,
         refundExtraId: selectedPreset.refundExtraId,
+        presetId: selectedPreset.id,
       })
       setQuote(result.data)
       setConfirming(true)
@@ -590,11 +694,29 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     try {
       const created = await createTunnel(selectedPreset, quote.quoteId)
       if (!created.payinAddress) throw new Error('ChangeNOW did not return a deposit address. The exchange may not support this route.')
-      setTunnel(created)
+      setTunnel({ ...created, presetId: selectedPreset.id })
       setTunnelPreset(selectedPreset)
       setQuote(null)
-      setHistoryError(created.historySaved ? '' : 'The tunnel was created, but it could not be saved to swap history.')
-      if (created.historySaved) loadSwapHistory().catch(() => setHistoryError('Tunnel created, but swap history could not be refreshed.'))
+      setHistoryError(created.trackingSaved ? '' : 'Automatic tracking for this exchange could not be saved. It may not appear in history automatically. Keep the exchange ID in its deposit details, if available, to check its status with ChangeNOW.')
+      if (created.trackingSaved && created.id) {
+        setPendingSwaps((current) => [{
+          id: created.id,
+          exchangeId: created.id,
+          presetId: selectedPreset.id,
+          status: created.status || 'waiting',
+          payinAddress: created.payinAddress,
+          payinExtraId: created.payinExtraId,
+          sourceName: selectedPreset.sourceName,
+          fromCurrency: selectedPreset.fromCurrency,
+          fromNetwork: selectedPreset.fromNetwork,
+          fromAmount: selectedPreset.fromAmount,
+          toCurrency: selectedPreset.toCurrency,
+          toNetwork: selectedPreset.toNetwork,
+          estimatedAmount: quote.estimatedAmount,
+          createdAt: Date.now(),
+        }, ...current.filter((swap) => swap.exchangeId !== created.id)])
+        loadSwapHistory().catch(() => setHistoryError("We couldn't refresh tracking details for this exchange. Please refresh exchange activity shortly."))
+      }
 
       const sourceWallet = getSourceWalletName(selectedPreset)
       setNotice(`Tunnel ready. Send only ${selectedPreset.fromCurrency?.toUpperCase()} on ${selectedPreset.fromNetwork?.toUpperCase()} from ${sourceWallet} to this address. This deposit address is for this exchange only.`)
@@ -611,21 +733,48 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     <div className="app-shell">
       <header className="topbar">
         <a className="app-brand" href="./" aria-label="AutoSwap Route Desk home">
-          <span className="brand-mark" aria-hidden="true">↔</span>
+          <BrandMark />
           <span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span>
         </a>
         <div className="account-menu">
-          <InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
-          <ThemeSelector onChange={onThemeChange} value={themePreference} />
-          <span className="account-email">{user.email}</span>
-          <button className="button button-quiet" onClick={() => signOut(auth)} type="button">Sign out</button>
+          <div className="account-tools">
+            <div className="settings-menu" ref={settingsMenuRef}>
+              <button
+                aria-controls="account-settings-panel"
+                aria-expanded={settingsOpen}
+                aria-label={settingsOpen ? 'Close settings menu' : 'Open settings menu'}
+                className="settings-menu-button"
+                onClick={() => setSettingsOpen((open) => !open)}
+                ref={settingsButtonRef}
+                title="Settings and account"
+                type="button"
+              >
+                <svg aria-hidden="true" focusable="false" viewBox="0 0 20 20">
+                  <path d="M4 6h12M4 10h12M4 14h12" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
+                </svg>
+              </button>
+              {settingsOpen && (
+                <div className="settings-menu-panel" id="account-settings-panel" aria-label="Settings and account">
+                  <div className="settings-theme-row">
+                    <span>Theme</span>
+                    <ThemeSelector className="settings-theme" onChange={(theme) => { onThemeChange(theme); setSettingsOpen(false) }} value={themePreference} />
+                  </div>
+                  <div className="settings-account-row">
+                    <span className="settings-account-email" title={user.email}>{user.email || 'Signed in'}</span>
+                    <button className="button button-quiet settings-sign-out" onClick={() => { setSettingsOpen(false); signOut(auth) }} type="button">Sign out</button>
+                  </div>
+                </div>
+              )}
+            </div>
+            <InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
+          </div>
         </div>
       </header>
 
       <main className="workspace">
         <aside className="route-rail">
           <div className="rail-heading">
-            <div><p className="eyebrow">YOUR WORKSPACE</p><h2>Saved routes</h2></div>
+            <div><p className="eyebrow">YOUR WORKSPACE</p><h2>Saved Routes</h2></div>
             <button className="icon-button" aria-label="Create route" title="Create route" onClick={toggleNewPreset} type="button">+</button>
           </div>
           {presets.length === 0 && <p className="empty-routes">No routes saved yet.</p>}
@@ -634,12 +783,21 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               <button
                 className={`route-item ${selectedId === preset.id ? 'route-item-active' : ''}`}
                 key={preset.id}
-                onClick={() => { setSelectedId(preset.id); setQuote(null); setTunnel(null); setTunnelPreset(null); setNotice(''); setError('') }}
+                onClick={() => {
+                  setSelectedId(preset.id)
+                  setShowNewPreset(false)
+                  setEditingPresetId('')
+                  setForm(emptyPreset)
+                  setQuote(null)
+                  setTunnel(null)
+                  setTunnelPreset(null)
+                  setNotice('')
+                  setError('')
+                  setHistoryError('')
+                }}
                 type="button"
               >
-                <span className="route-item-top"><span>{preset.name}</span><span className="route-dot" /></span>
-                <span className="route-item-path">{preset.fromCurrency?.toUpperCase()} <b>→</b> {preset.toCurrency?.toUpperCase()}</span>
-                <span className="route-item-mode">MANUAL SWAP</span>
+                <span className="route-item-top"><span>{getPresetName(preset)}</span><span className="route-dot" /></span>
               </button>
             ))}
           </nav>
@@ -649,7 +807,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         <section className="desk-content">
           <div className="page-heading">
             <div><p className="eyebrow">POWERED BY CHANGENOW</p><h1>Route Desk</h1></div>
-            {selectedPreset && <button className="button button-quiet delete-button" onClick={removePreset} type="button">Delete route</button>}
+            {selectedPreset && !showNewPreset && <button className="button button-quiet delete-button" onClick={removePreset} type="button">Delete route</button>}
           </div>
 
           {!isFirebaseConfigured && <div className="notice notice-warning">Firebase is not configured. Add the VITE_FIREBASE_* values before signing in or saving routes.</div>}
@@ -658,10 +816,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
           {showNewPreset && (
             <section className="panel new-route-panel">
-              <div className="panel-heading"><div><p className="eyebrow">{editingPresetId ? 'EDIT PRESET' : 'NEW PRESET'}</p><h2>{editingPresetId ? 'Edit saved route' : 'Route details'}</h2></div></div>
+              <div className="panel-heading"><div><p className="eyebrow">{editingPresetId ? 'EDIT PRESET' : 'NEW PRESET'}</p><h2>{editingPresetId ? 'Edit Saved Route' : 'Route Details'}</h2></div></div>
               <form className="preset-form" onSubmit={savePreset}>
-                <label className="field-wide">Saved preset name<input name="name" value={form.name} onChange={updateForm} placeholder="For example, BTC to ETH" maxLength="48" required /></label>
-                <p className="field-note field-wide">Use this name to identify the saved route later. It does not affect the swap.</p>
                 <label className="field-wide">Source wallet or app (optional)<input name="sourceName" value={form.sourceName} onChange={updateForm} placeholder="For your reference" maxLength="48" /></label>
                 {currenciesLoading && <p className="field-note field-wide" role="status">Loading ChangeNOW assets…</p>}
                 {currencyError && <div className="notice notice-error field-wide" role="alert">{currencyError}<button className="button button-quiet" onClick={() => setCurrencyReloadKey((key) => key + 1)} type="button">Reload assets</button></div>}
@@ -765,17 +921,17 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           )}
 
           {!selectedPreset && !showNewPreset && (
-            <section className="empty-state"><div className="empty-glyph" aria-hidden="true">↗</div><p className="eyebrow">READY WHEN YOU ARE</p><h2>Create your first route.</h2><p>Save your swap details and destination addresses for easy reuse.</p><button className="button button-primary" onClick={() => setShowNewPreset(true)} type="button">Create a route <span aria-hidden="true">+</span></button></section>
+            <section className="empty-state"><div className="empty-glyph" aria-hidden="true">↗</div><p className="eyebrow">READY WHEN YOU ARE</p><h2>Create Your First Route</h2><p>Save your swap details and destination addresses for easy reuse.</p><button className="button button-primary" onClick={toggleNewPreset} type="button">Create a route <span aria-hidden="true">+</span></button></section>
           )}
 
           {selectedPreset && !showNewPreset && (
             <>
               <section className="route-summary">
-                <div className="summary-origin"><span className="summary-label">FROM</span><strong>{getSourceWalletName(selectedPreset)}</strong><small>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} · {selectedPreset.fromNetwork?.toUpperCase()}</small></div>
-                <div className="summary-destination"><span className="summary-label">TO</span><strong>{getDestinationWalletName(selectedPreset)}</strong><small>{selectedPreset.toCurrency?.toUpperCase()} · {selectedPreset.toNetwork?.toUpperCase()}</small></div>
+                <div className="summary-origin"><span className="summary-label">FROM</span><strong>{getSourceWalletName(selectedPreset)}</strong></div>
+                <div className="summary-destination"><span className="summary-label">TO</span><strong>{getDestinationWalletName(selectedPreset)}</strong></div>
               </section>
               <section className="panel active-route-panel">
-                <div className="panel-heading"><div><p className="eyebrow">ACTIVE PRESET</p><h2>{selectedPreset.name}</h2></div><span className="panel-index">01 / ROUTE</span></div>
+                <div className="panel-heading"><div><p className="eyebrow">ACTIVE PRESET</p><h2>{getPresetName(selectedPreset)}</h2></div><span className="panel-index">01 / ROUTE</span></div>
                 <div className="detail-grid">
                   <div><span>Send amount</span><strong>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()}</strong></div>
                   <div><span>Deposit network</span><strong>{selectedPreset.fromNetwork?.toUpperCase()}</strong></div>
@@ -787,26 +943,27 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
             </>
           )}
 
-          {notice && <div className="notice notice-success" role="status">{notice}</div>}
+          {notice && !showNewPreset && <div className="notice notice-success" role="status">{notice}</div>}
 
-          {tunnel && (
+          {activeTunnel && !showNewPreset && (
             <section className="panel tunnel-panel">
-              <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap tunnel ready</h2></div><span className="live-badge">LIVE</span></div>
-              <p className="field-note">Send only {(tunnelPreset ?? selectedPreset)?.fromCurrency?.toUpperCase()} on {(tunnelPreset ?? selectedPreset)?.fromNetwork?.toUpperCase()} from {getSourceWalletName(tunnelPreset ?? selectedPreset)}. Sending another asset or network can permanently lose funds.</p>
+              <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap Tunnel Ready</h2></div><span className="live-badge">LIVE</span></div>
+              <p className="field-note">Send only {(activeTunnelPreset ?? selectedPreset)?.fromCurrency?.toUpperCase()} on {(activeTunnelPreset ?? selectedPreset)?.fromNetwork?.toUpperCase()} from {getSourceWalletName(activeTunnelPreset ?? selectedPreset)}. Sending another asset or network can permanently lose funds.</p>
               <div className="notice notice-warning single-use-warning">Use this deposit address once for this exchange only. Never reuse it for another quote or swap. Send the exact asset on the exact network shown above.</div>
-              <div className="deposit-address"><span>Deposit address</span><code>{tunnel.payinAddress}</code><button className="button button-quiet" onClick={() => copyToClipboard(tunnel.payinAddress, 'Address')} type="button">Copy address</button></div>
-              {tunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{tunnel.payinExtraId}</code><button className="button button-quiet" onClick={() => copyToClipboard(tunnel.payinExtraId, 'Memo or tag')} type="button">Copy memo or tag</button></div>}
-              {tunnel.transactionHash && <div className="transaction-hash"><span>Wallet transaction</span><code>{tunnel.transactionHash}</code></div>}
-              {tunnel.id && <p className="field-note">Exchange ID: {tunnel.id}</p>}
+              <div className="deposit-address"><span>Deposit address</span><code>{activeTunnel.payinAddress}</code><button aria-label={copyToast?.target === 'address' ? 'Address copied to clipboard' : 'Copy address'} aria-live="polite" className={`button button-quiet ${copyToast?.target === 'address' ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(activeTunnel.payinAddress, 'Address', 'address')} type="button">{copyToast?.target === 'address' ? '✓ Copied' : 'Copy address'}</button></div>
+              {activeTunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{activeTunnel.payinExtraId}</code><button aria-label={copyToast?.target === 'memo' ? 'Memo or tag copied to clipboard' : 'Copy memo or tag'} aria-live="polite" className={`button button-quiet ${copyToast?.target === 'memo' ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(activeTunnel.payinExtraId, 'Memo or tag', 'memo')} type="button">{copyToast?.target === 'memo' ? '✓ Copied' : 'Copy memo or tag'}</button></div>}
+              {activeTunnel.transactionHash && <div className="transaction-hash"><span>Wallet transaction</span><code>{activeTunnel.transactionHash}</code></div>}
+              {activeTunnel.id && <p className="field-note">Exchange ID: {activeTunnel.id}</p>}
             </section>
           )}
 
           <section className="panel history-panel" aria-labelledby="swap-history-title">
-            <div className="panel-heading"><div><p className="eyebrow">EXCHANGE ACTIVITY</p><h2 id="swap-history-title">Swap history</h2></div><button className="button button-quiet" disabled={historyLoading} onClick={() => { setHistoryError(''); loadSwapHistory().catch(() => setHistoryError('Swap history could not be loaded.')) }} type="button">Refresh history</button></div>
-            {historyError && <div className="notice notice-error" role="alert">{historyError}</div>}
-            {historyLoading ? <p className="history-empty">Loading swap history…</p> : swapHistory.length === 0 ? <p className="history-empty">Your new swaps will appear here once a tunnel is created.</p> : (
+            <div className="panel-heading"><div><p className="eyebrow">EXCHANGE ACTIVITY</p><h2 id="swap-history-title">Swap History</h2></div><button className="button button-quiet" disabled={historyLoading} onClick={() => { setHistoryError(''); loadSwapHistory().catch(() => setHistoryError('Swap history could not be loaded.')) }} type="button">Refresh history</button></div>
+            {historyError && !showNewPreset && <div className="notice notice-warning" role="status">{historyError}</div>}
+            {pendingSwaps.length > 0 && <div className="notice notice-warning" role="status">New swaps appear here as Waiting while the deposit tunnel is open. AutoSwap checks their status with ChangeNOW. If the tunnel expires before a deposit is received, it is marked Cancelled. Swaps with a detected deposit remain here through processing and completion.</div>}
+            {historyLoading ? <p className="history-empty">Loading exchange activity…</p> : visibleSwapHistory.length === 0 ? <p className="history-empty">Swaps appear here as Waiting when a deposit tunnel opens. If a tunnel expires before a deposit is received, it is marked Cancelled. Once a deposit is detected, the swap remains in history through processing and completion.</p> : (
               <div className="history-list">
-                {swapHistory.map((swap) => {
+                {visibleSwapHistory.map((swap) => {
                   const status = String(swap.status || 'unknown').toLowerCase()
                   const isTerminal = terminalSwapStatuses.has(status)
                   return (
@@ -833,7 +990,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddressBookDialog('') }}>
           <section className="confirm-modal address-book-modal" role="dialog" aria-modal="true" aria-labelledby="address-book-title">
             <p className="eyebrow">PRIVATE TO YOUR ACCOUNT</p>
-            <h2 id="address-book-title">{addressBookDialog === 'save' ? 'Save address' : 'Address book'}</h2>
+            <h2 id="address-book-title">{addressBookDialog === 'save' ? 'Save Address' : 'Address Book'}</h2>
             {addressBookDialog === 'save' ? (
               <form className="address-save-form" onSubmit={saveAddress}>
                 <p className="muted">{addressDraft.ticker.toUpperCase()} on {addressDraft.network.toUpperCase()} · {addressDraft.purpose === 'destination' ? 'Destination' : 'Refund'} address</p>
@@ -862,7 +1019,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setConfirming(false) }}>
           <section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
             <p className="eyebrow">FINAL REVIEW</p>
-            <h2 id="confirm-title">Confirm this route?</h2>
+            <h2 id="confirm-title">Confirm This Route?</h2>
             <p className="muted">Review the live estimate before creating a deposit tunnel. This quote expires at {new Date(quote.quoteExpiresAt).toLocaleTimeString()}.</p>
             <dl className="confirmation-list">
               <div><dt>Send</dt><dd>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} on {selectedPreset.fromNetwork?.toUpperCase()}</dd></div>

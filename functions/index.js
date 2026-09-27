@@ -2,8 +2,9 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https')
 const { defineSecret } = require('firebase-functions/params')
 const { initializeApp } = require('firebase-admin/app')
 const { getFirestore, Timestamp } = require('firebase-admin/firestore')
-const { quoteMatchesExchange, quoteExpired } = require('./quote-validation')
+const { quoteMatchesExchange, quoteMatchesPreset, quoteExpired } = require('./quote-validation')
 const { normalizeCurrencyCatalog } = require('./currency-catalog')
+const { depositReceived, pendingHistoryStatus } = require('./swap-history-status')
 const {
   MAX_ADDRESS_BOOK_ENTRIES_PER_USER,
   MAX_DAILY_SAVED_RECORD_WRITES,
@@ -20,6 +21,7 @@ const CHANGE_NOW_URL = 'https://api.changenow.io/v2/exchange'
 const QUOTE_COOLDOWN_MS = 2000
 const CREATE_COOLDOWN_MS = 10000
 const QUOTE_TTL_MS = 60000
+const PENDING_SWAP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 const CURRENCY_CACHE_TTL_MS = 300000
 const SAVED_RECORD_WRITE_COOLDOWN_MS = 1000
 let cachedCurrencies = null
@@ -118,13 +120,17 @@ function requiredRecordId(value, field) {
   return id
 }
 
-async function assertSavedRecordDailyCapacity(globalUsageRef) {
-  const day = new Date().toISOString().slice(0, 10)
-  const snapshot = await globalUsageRef.get()
-  const usage = snapshot.data()
-  if (usage?.day === day && usage.count >= MAX_DAILY_SAVED_RECORD_WRITES) {
-    throw new HttpsError('resource-exhausted', 'The app-wide daily saved-record limit has been reached. Try again tomorrow.')
+async function getMatchingSavedPreset(uid, value, exchange) {
+  const presetId = requiredRecordId(value, 'presetId')
+  const snapshot = await database.collection('users').doc(uid).collection('presets').doc(presetId).get()
+  if (!snapshot.exists) throw new HttpsError('failed-precondition', 'The selected saved route could not be found. Refresh routes and try again.')
+
+  const preset = snapshot.data()
+  if (!quoteMatchesPreset(preset, exchange)) {
+    throw new HttpsError('failed-precondition', 'The selected saved route has changed. Refresh routes and request a new quote.')
   }
+
+  return { presetId, sourceName: preset.sourceName ?? '' }
 }
 
 async function saveUserRecord(uid, collectionName, record, maximum, countField, recordId = '') {
@@ -132,7 +138,6 @@ async function saveUserRecord(uid, collectionName, record, maximum, countField, 
   const recordRef = recordId ? collectionRef.doc(recordId) : collectionRef.doc()
   const usageRef = getUserRecordUsageRef(uid)
   const globalUsageRef = database.collection('_swapGlobalLimits').doc('savedRecordWrites')
-  await assertSavedRecordDailyCapacity(globalUsageRef)
   if (recordId && !(await recordRef.get()).exists) throw new HttpsError('not-found', 'Saved record not found.')
   await enforceRequestCooldown(uid, 'saved-record-write', SAVED_RECORD_WRITE_COOLDOWN_MS)
   const now = Date.now()
@@ -225,20 +230,25 @@ async function deleteUserRecord(uid, collectionName, maximum, countField, record
   })
 }
 
-const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired'])
+const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
 
-async function consumeQuote(uid, quoteId, exchange) {
+async function consumeQuote(uid, quoteId, exchange, presetId) {
   const quoteRef = database.collection('users').doc(uid).collection('swapQuotes').doc(quoteId)
+  const presetRef = database.collection('users').doc(uid).collection('presets').doc(presetId)
   const rateLimitRef = database.collection('_swapRateLimits').doc(`${uid}-create`)
 
   await database.runTransaction(async (transaction) => {
-    const [quoteSnapshot, rateLimitSnapshot] = await Promise.all([
+    const [quoteSnapshot, presetSnapshot, rateLimitSnapshot] = await Promise.all([
       transaction.get(quoteRef),
+      transaction.get(presetRef),
       transaction.get(rateLimitRef),
     ])
 
     if (!quoteSnapshot.exists) {
       throw new HttpsError('failed-precondition', 'Quote is missing or does not belong to this account. Request a new quote.')
+    }
+    if (!presetSnapshot.exists || !quoteMatchesPreset(presetSnapshot.data(), exchange)) {
+      throw new HttpsError('failed-precondition', 'The selected saved route has changed. Refresh routes and request a new quote.')
     }
 
     const quote = quoteSnapshot.data()
@@ -251,6 +261,9 @@ async function consumeQuote(uid, quoteId, exchange) {
     }
     if (!quoteMatchesExchange(quote, exchange)) {
       throw new HttpsError('failed-precondition', 'Route details changed after quoting. Request a new quote and confirm those details.')
+    }
+    if (quote.presetId && quote.presetId !== presetId) {
+      throw new HttpsError('failed-precondition', 'This quote belongs to a different saved route. Request a new quote.')
     }
 
     const lastRequestAt = rateLimitSnapshot.data()?.lastRequestAt?.toMillis() ?? 0
@@ -434,6 +447,7 @@ exports.getSwapQuote = onCall(
     const quotedExchange = { ...exchange, toAddress }
 
     await enforceRequestCooldown(request.auth.uid, 'quote', QUOTE_COOLDOWN_MS)
+    const { presetId, sourceName } = await getMatchingSavedPreset(request.auth.uid, request.data?.presetId, quotedExchange)
     const minimum = await callChangeNow(`/min-amount?${buildQuery(exchange)}`)
     const minimumAmount = minimum.minAmount ?? minimum.minimumAmount
     if ((typeof minimumAmount !== 'string' && typeof minimumAmount !== 'number') ||
@@ -457,6 +471,8 @@ exports.getSwapQuote = onCall(
     await quoteRef.create({
       userId: request.auth.uid,
       ...quotedExchange,
+      presetId,
+      sourceName,
       minimumAmount: String(minimumAmount),
       estimatedAmount: String(estimatedAmount),
       createdAt: Timestamp.fromMillis(quotedAt),
@@ -483,8 +499,9 @@ exports.createSwapTunnel = onCall(
     const exchange = validateExchangeRequest(request.data)
     const toAddress = requiredString(exchange.toAddress, 'toAddress', 256)
     const quoteId = requiredString(request.data?.quoteId, 'quoteId', 128)
+    const presetId = requiredRecordId(request.data?.presetId, 'presetId')
 
-    await consumeQuote(request.auth.uid, quoteId, { ...exchange, toAddress })
+    await consumeQuote(request.auth.uid, quoteId, { ...exchange, toAddress }, presetId)
     const result = await callChangeNow('', {
       method: 'POST',
       body: {
@@ -508,23 +525,23 @@ exports.createSwapTunnel = onCall(
     }
 
     const exchangeId = result.id ?? result.exchangeId ?? null
-    let historySaved = false
-    try {
-      await swapHistoryCollection(request.auth.uid).add({
-        exchangeId: typeof exchangeId === 'string' ? exchangeId : null,
-        fromCurrency: exchange.fromCurrency,
-        fromNetwork: exchange.fromNetwork,
-        fromAmount: exchange.fromAmount,
-        toCurrency: exchange.toCurrency,
-        toNetwork: exchange.toNetwork,
-        toAmount: result.toAmount == null ? null : String(result.toAmount),
-        status: typeof result.status === 'string' ? result.status : 'waiting',
-        createdAt: Timestamp.fromMillis(Date.now()),
-        updatedAt: Timestamp.fromMillis(Date.now()),
-      })
-      historySaved = true
-    } catch (historyError) {
-      console.error('Could not save swap history:', historyError.message)
+    let trackingSaved = false
+    if (typeof exchangeId === 'string') {
+      try {
+        const now = Date.now()
+        await database.collection('users').doc(request.auth.uid).collection('swapQuotes').doc(quoteId).update({
+          exchangeId,
+          status: typeof result.status === 'string' ? result.status : 'waiting',
+          trackingStatus: 'pending',
+          payinAddress,
+          payinExtraId: result.payinExtraId ?? null,
+          updatedAt: Timestamp.fromMillis(now),
+          expiresAt: Timestamp.fromMillis(now + PENDING_SWAP_RETENTION_MS),
+        })
+        trackingSaved = true
+      } catch (trackingError) {
+        console.error('Could not save pending swap tracking:', trackingError.message)
+      }
     }
 
     return {
@@ -535,7 +552,7 @@ exports.createSwapTunnel = onCall(
       fromAmount: String(result.fromAmount ?? exchange.fromAmount),
       toAmount: result.toAmount == null ? null : String(result.toAmount),
       status: result.status ?? 'waiting',
-      historySaved,
+      trackingSaved,
     }
   },
 )
@@ -544,12 +561,31 @@ exports.getSwapHistory = onCall(
   { region: 'us-central1', maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
-    const snapshot = await swapHistoryCollection(request.auth.uid)
-      .orderBy('createdAt', 'desc')
-      .limit(50)
-      .get()
+    const userQuotes = database.collection('users').doc(request.auth.uid).collection('swapQuotes')
+    const [snapshot, pendingSnapshot] = await Promise.all([
+      swapHistoryCollection(request.auth.uid).orderBy('createdAt', 'desc').limit(50).get(),
+      userQuotes.where('trackingStatus', '==', 'pending').limit(50).get(),
+    ])
 
-    return { swaps: snapshot.docs.map(serializeSwapHistory) }
+    return {
+      swaps: snapshot.docs.map(serializeSwapHistory),
+      pendingSwaps: pendingSnapshot.docs.map((pendingDoc) => ({
+        id: pendingDoc.id,
+        presetId: pendingDoc.get('presetId') ?? null,
+        exchangeId: pendingDoc.get('exchangeId'),
+        status: pendingDoc.get('status') ?? 'waiting',
+        payinAddress: pendingDoc.get('payinAddress') ?? null,
+        payinExtraId: pendingDoc.get('payinExtraId') ?? null,
+        sourceName: pendingDoc.get('sourceName') ?? '',
+        fromCurrency: pendingDoc.get('fromCurrency'),
+        fromNetwork: pendingDoc.get('fromNetwork'),
+        fromAmount: pendingDoc.get('fromAmount'),
+        toCurrency: pendingDoc.get('toCurrency'),
+        toNetwork: pendingDoc.get('toNetwork'),
+        estimatedAmount: pendingDoc.get('estimatedAmount') ?? null,
+        createdAt: pendingDoc.get('createdAt')?.toMillis() ?? null,
+      })),
+    }
   },
 )
 
@@ -562,14 +598,20 @@ exports.refreshSwapStatus = onCall(
       .where('exchangeId', '==', exchangeId)
       .limit(1)
       .get()
+    const historyDoc = historySnapshot.docs[0] ?? null
+    const pendingSnapshot = historyDoc ? null : await database.collection('users').doc(request.auth.uid)
+      .collection('swapQuotes')
+      .where('exchangeId', '==', exchangeId)
+      .limit(1)
+      .get()
+    const pendingDoc = pendingSnapshot?.docs[0] ?? null
 
-    if (historySnapshot.empty) {
+    if (!historyDoc && !pendingDoc) {
       throw new HttpsError('not-found', 'This exchange is not in your swap history.')
     }
 
-    const historyDoc = historySnapshot.docs[0]
-    const savedRecord = historyDoc.data()
-    if (terminalSwapStatuses.has(String(savedRecord.status).toLowerCase())) {
+    const savedRecord = (historyDoc ?? pendingDoc).data()
+    if (historyDoc && terminalSwapStatuses.has(String(savedRecord.status).toLowerCase())) {
       return serializeSwapHistory(historyDoc)
     }
 
@@ -577,6 +619,67 @@ exports.refreshSwapStatus = onCall(
     const result = await callChangeNow(`/by-id?id=${encodeURIComponent(exchangeId)}`)
     if (typeof result.status !== 'string' || !result.status.trim()) {
       throw new HttpsError('unavailable', 'ChangeNOW did not return a transaction status.')
+    }
+
+    if (pendingDoc) {
+      const status = result.status.toLowerCase()
+      if (depositReceived(status)) {
+        const historyRef = swapHistoryCollection(request.auth.uid).doc(pendingDoc.id)
+        await database.runTransaction(async (transaction) => {
+          const pendingSnapshot = await transaction.get(pendingDoc.ref)
+          if (!pendingSnapshot.exists || pendingSnapshot.get('trackingStatus') !== 'pending') return
+          const pendingRecord = pendingSnapshot.data()
+          transaction.set(historyRef, {
+            exchangeId,
+            fromCurrency: pendingRecord.fromCurrency,
+            fromNetwork: pendingRecord.fromNetwork,
+            fromAmount: pendingRecord.fromAmount,
+            toCurrency: pendingRecord.toCurrency,
+            toNetwork: pendingRecord.toNetwork,
+            toAmount: result.toAmount == null ? pendingRecord.estimatedAmount ?? null : String(result.toAmount),
+            status: result.status,
+            createdAt: pendingRecord.createdAt ?? Timestamp.fromMillis(Date.now()),
+            updatedAt: Timestamp.fromMillis(Date.now()),
+          })
+          transaction.delete(pendingDoc.ref)
+        })
+
+        const promotedSnapshot = await historyRef.get()
+        return promotedSnapshot.exists
+          ? { ...serializeSwapHistory(promotedSnapshot), historyCreated: true }
+          : { id: pendingDoc.id, exchangeId, status: result.status, pending: true }
+      }
+
+      if (status === 'expired') {
+        const historyRef = swapHistoryCollection(request.auth.uid).doc(pendingDoc.id)
+        await database.runTransaction(async (transaction) => {
+          const currentPending = await transaction.get(pendingDoc.ref)
+          if (!currentPending.exists || currentPending.get('trackingStatus') !== 'pending') return
+          const pendingRecord = currentPending.data()
+          const now = Timestamp.fromMillis(Date.now())
+          transaction.set(historyRef, {
+            exchangeId,
+            fromCurrency: pendingRecord.fromCurrency,
+            fromNetwork: pendingRecord.fromNetwork,
+            fromAmount: pendingRecord.fromAmount,
+            toCurrency: pendingRecord.toCurrency,
+            toNetwork: pendingRecord.toNetwork,
+            toAmount: pendingRecord.estimatedAmount ?? null,
+            status: pendingHistoryStatus(result.status),
+            createdAt: pendingRecord.createdAt ?? now,
+            updatedAt: now,
+          })
+          transaction.delete(pendingDoc.ref)
+        })
+
+        const cancelledSnapshot = await historyRef.get()
+        return cancelledSnapshot.exists
+          ? { ...serializeSwapHistory(cancelledSnapshot), historyCreated: true }
+          : { exchangeId, status: 'cancelled', pending: true }
+      }
+
+      await pendingDoc.ref.update({ status: result.status, updatedAt: Timestamp.fromMillis(Date.now()) })
+      return { id: pendingDoc.id, exchangeId, status: result.status, pending: true }
     }
 
     await historyDoc.ref.update({

@@ -1,16 +1,18 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
 import Auth from './components/Auth.jsx'
+import BrandMark from './components/BrandMark.jsx'
 import InstallAppControl from './components/InstallAppControl.jsx'
 import ThemeSelector from './components/ThemeSelector.jsx'
 import { auth, isFirebaseConfigured } from './firebase.js'
 
 const SwapEngine = lazy(() => import('./components/SwapEngine.jsx'))
+const supportedThemes = new Set(['system', 'light', 'dark', 'neon', 'azure-trade', 'sage-clay', 'slate-pro', 'twilight-modern'])
 
 function getSavedTheme() {
   try {
     const savedTheme = window.localStorage.getItem('autoswap-theme')
-    return ['system', 'light', 'dark'].includes(savedTheme) ? savedTheme : 'system'
+    return supportedThemes.has(savedTheme) ? savedTheme : 'system'
   } catch {
     return 'system'
   }
@@ -75,7 +77,7 @@ export default function App() {
   }, [])
 
   if (!isFirebaseConfigured) {
-    return <main className="auth-shell"><InstallAppControl className="auth-install-control" installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIosDevice()} onPromptConsumed={() => setInstallPrompt(null)} /><ThemeSelector className="auth-theme-selector" onChange={setThemePreference} value={themePreference} /><div className="auth-brand"><span className="brand-mark">↔</span><span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span></div><section className="auth-panel"><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Firebase.</h1><p className="muted">Set the VITE_FIREBASE_* values in your deployment environment to enable authentication and private route storage.</p></section></main>
+    return <main className="auth-shell"><div className="auth-toolbar"><InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIosDevice()} onPromptConsumed={() => setInstallPrompt(null)} /><ThemeSelector onChange={setThemePreference} value={themePreference} /></div><div className="auth-brand"><BrandMark /><span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span></div><section className="auth-panel"><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Firebase.</h1><p className="muted">Set the VITE_FIREBASE_* values in your deployment environment to enable authentication and private route storage.</p></section></main>
   }
 
   if (!authReady) return <main className="loading-screen">Loading secure workspace…</main>

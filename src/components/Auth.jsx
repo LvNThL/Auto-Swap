@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import BrandMark from './BrandMark.jsx'
 import InstallAppControl from './InstallAppControl.jsx'
 import ThemeSelector from './ThemeSelector.jsx'
 import {
@@ -76,12 +77,14 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
   if (verificationUser) {
     return (
       <main className="auth-shell">
-        <InstallAppControl className="auth-install-control" installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
-        <ThemeSelector className="auth-theme-selector" onChange={onThemeChange} value={themePreference} />
-        <div className="auth-brand"><span className="brand-mark" aria-hidden="true">↔</span><span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span></div>
+        <div className="auth-toolbar">
+          <InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
+          <ThemeSelector onChange={onThemeChange} value={themePreference} />
+        </div>
+        <div className="auth-brand"><BrandMark /><span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span></div>
         <section className="auth-panel">
           <p className="eyebrow">VERIFY YOUR EMAIL</p>
-          <h1>One more step.</h1>
+          <h1>One More Step</h1>
           <p className="muted">Open the verification link sent to {verificationUser.email}. Swap routes stay locked until your email is verified.</p>
           {message && <p className="form-message" role="status">{message}</p>}
           <div className="form-stack">
@@ -96,15 +99,17 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
 
   return (
     <main className="auth-shell">
-      <InstallAppControl className="auth-install-control" installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
-      <ThemeSelector className="auth-theme-selector" onChange={onThemeChange} value={themePreference} />
+      <div className="auth-toolbar">
+        <InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />
+        <ThemeSelector onChange={onThemeChange} value={themePreference} />
+      </div>
       <div className="auth-brand">
-        <span className="brand-mark" aria-hidden="true">↔</span>
+        <BrandMark />
         <span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span>
       </div>
       <section className="auth-panel">
         <p className="eyebrow">PRIVATE WORKSPACE</p>
-        <h1>{mode === 'login' ? 'Sign in to continue.' : 'Create your account.'}</h1>
+        <h1>{mode === 'login' ? 'Sign In to Continue' : 'Create Your Account'}</h1>
         <p className="muted">Your routes are saved privately to your account.</p>
         <form className="form-stack" onSubmit={submit}>
           <label>

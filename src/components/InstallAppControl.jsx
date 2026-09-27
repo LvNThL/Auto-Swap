@@ -33,7 +33,7 @@ export default function InstallAppControl({ installPrompt, isInstalled, isIos, o
   return (
     <div className={`install-control ${className}`.trim()}>
       <button aria-label="Install app" className="button button-quiet install-button" onClick={installApp} title="Install app" type="button">
-        <span aria-hidden="true">↓</span> Install app
+        <span className="install-icon" aria-hidden="true">↓</span><span className="install-label">Install app</span>
       </button>
       {feedback && <div className="copy-toast install-feedback" role="status" aria-live="polite">{feedback}</div>}
       {showGuide && (
