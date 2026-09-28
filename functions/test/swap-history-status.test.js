@@ -1,6 +1,13 @@
 const assert = require('node:assert/strict')
 const test = require('node:test')
-const { depositReceived, pendingHistoryStatus, isWaitingForDeposit, isLocallyClosedSwap } = require('../swap-history-status')
+const {
+  depositReceived,
+  pendingHistoryStatus,
+  isWaitingForDeposit,
+  isLocallyClosedSwap,
+  tunnelAccessExpiresAt,
+  isTunnelAccessWindowOpen,
+} = require('../swap-history-status')
 
 test('only treats statuses after deposit detection as history-worthy', () => {
   for (const status of ['confirming', 'exchanging', 'sending', 'finished', 'failed', 'refunded']) {
@@ -31,4 +38,15 @@ test('keeps AutoSwap-closed swaps eligible for later provider status checks', ()
   assert.equal(isLocallyClosedSwap({ status: 'cancelled', cancellationReason: 'access-window-ended' }), true)
   assert.equal(isLocallyClosedSwap({ status: 'cancelled', cancellationReason: 'provider-expired' }), false)
   assert.equal(isLocallyClosedSwap({ status: 'waiting', cancellationReason: 'access-window-ended' }), false)
+})
+
+test('uses the stored access deadline and falls back to tunnel-open time', () => {
+  const record = {
+    tunnelOpenedAt: { toMillis: () => 60_000 },
+    tunnelAccessExpiresAt: { toMillis: () => 480_000 },
+  }
+  assert.equal(tunnelAccessExpiresAt(record, 420_000), 480_000)
+  assert.equal(isTunnelAccessWindowOpen(record, 479_999, 420_000), true)
+  assert.equal(isTunnelAccessWindowOpen(record, 480_000, 420_000), false)
+  assert.equal(tunnelAccessExpiresAt({ createdAt: 60_000 }, 420_000), 480_000)
 })

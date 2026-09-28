@@ -6,7 +6,13 @@ const { getFirestore, Timestamp } = require('firebase-admin/firestore')
 const { getStorage } = require('firebase-admin/storage')
 const { quoteMatchesExchange, quoteMatchesPreset, quoteExpired } = require('./quote-validation')
 const { normalizeCurrencyCatalog } = require('./currency-catalog')
-const { depositReceived, pendingHistoryStatus, isWaitingForDeposit, isLocallyClosedSwap } = require('./swap-history-status')
+const {
+  depositReceived,
+  pendingHistoryStatus,
+  isWaitingForDeposit,
+  isLocallyClosedSwap,
+  isTunnelAccessWindowOpen,
+} = require('./swap-history-status')
 const {
   historyArchiveMonth,
   historyArchivePath,
@@ -826,6 +832,8 @@ exports.refreshSwapStatus = onCall(
     }
 
     if (pendingDoc) {
+      const pendingRecord = pendingDoc.data()
+      const accessWindowOpen = isTunnelAccessWindowOpen(pendingRecord, Date.now(), TUNNEL_ACCESS_TTL_MS)
       if (depositReceived(status)) {
         return savePendingSwapToHistory({
           uid: request.auth.uid,
@@ -838,6 +846,11 @@ exports.refreshSwapStatus = onCall(
       }
 
       if (status === 'expired') {
+        if (accessWindowOpen) {
+          await pendingDoc.ref.update({ ...transactionDetails, status: result.status, updatedAt: Timestamp.fromMillis(Date.now()) })
+          return { id: pendingDoc.id, exchangeId, status: result.status, ...transactionDetails, pending: true }
+        }
+
         return savePendingSwapToHistory({
           uid: request.auth.uid,
           pendingDoc,
@@ -888,17 +901,11 @@ exports.cancelPendingSwap = onCall(
       throw new HttpsError('not-found', 'This waiting exchange is no longer available to close.')
     }
 
-    const cancellationReason = request.data?.reason ?? 'user-requested'
-    if (!['user-requested', 'access-window-ended'].includes(cancellationReason)) {
+    if (request.data?.reason != null && request.data.reason !== 'user-requested') {
       throw new HttpsError('invalid-argument', 'Invalid cancellation reason.')
     }
-    if (cancellationReason === 'access-window-ended') {
-      const openedAt = pendingDoc.get('tunnelOpenedAt')?.toMillis() ?? 0
-      const accessExpiresAt = pendingDoc.get('tunnelAccessExpiresAt')?.toMillis()
-        ?? openedAt + TUNNEL_ACCESS_TTL_MS
-      if (Date.now() < accessExpiresAt) {
-        throw new HttpsError('failed-precondition', 'This tunnel is still within its address access window.')
-      }
+    if (isTunnelAccessWindowOpen(pendingDoc.data(), Date.now(), TUNNEL_ACCESS_TTL_MS)) {
+      throw new HttpsError('failed-precondition', 'This tunnel is still within its address access window.')
     }
 
     await enforceRequestCooldown(uid, `cancel-${exchangeId}`, 5000)
@@ -943,7 +950,7 @@ exports.cancelPendingSwap = onCall(
       exchangeId,
       transactionDetails,
       status: 'cancelled',
-      cancellationReason,
+      cancellationReason: 'user-requested',
     })
   },
 )

@@ -144,9 +144,16 @@ function isLocallyClosedSwap(swap) {
     && autoSwapClosureReasons.has(swap.cancellationReason)
 }
 
-function SwapHistoryItem({ swap, onCancel, cancellingExchangeId }) {
+function SwapHistoryItem({ swap, onCancel, cancellingExchangeId, statusCheck }) {
   const status = String(swap.status || 'unknown').toLowerCase()
   const isTerminal = terminalSwapStatuses.has(status)
+  const accessExpiresAt = swap.accessExpiresAt ?? (swap.createdAt ? swap.createdAt + TUNNEL_ACCESS_TTL_MS : null)
+  const canCancel = swap.pending
+    && status === 'waiting'
+    && Number.isFinite(accessExpiresAt)
+    && Date.now() >= accessExpiresAt
+    && statusCheck?.status === 'waiting'
+    && statusCheck.requestStartedAt >= accessExpiresAt
 
   return (
     <article className="history-item">
@@ -164,7 +171,7 @@ function SwapHistoryItem({ swap, onCancel, cancellingExchangeId }) {
       </div>
       <div className="history-status-controls">
         <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status, swap.cancellationReason)}</span>
-        {swap.pending && status === 'waiting' && (
+        {canCancel && (
           <button className="button button-quiet" disabled={cancellingExchangeId !== ''} onClick={() => onCancel(swap)} title="Closes tracking in AutoSwap only; this does not cancel the ChangeNOW exchange." type="button">
             {cancellingExchangeId === swap.exchangeId ? 'Checking…' : 'Cancel'}
           </button>
@@ -209,6 +216,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
   const [cancellingExchangeId, setCancellingExchangeId] = useState('')
+  const [statusCheckByExchange, setStatusCheckByExchange] = useState({})
   const [copyToast, setCopyToast] = useState(null)
   const [clockNow, setClockNow] = useState(() => Date.now())
 
@@ -362,7 +370,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     const locallyClosedCheckAt = new Map()
     const getHistory = httpsCallable(functions, 'getSwapHistory')
     const refreshStatus = httpsCallable(functions, 'refreshSwapStatus')
-    const cancelPendingSwap = httpsCallable(functions, 'cancelPendingSwap')
 
     async function loadHistory() {
       try {
@@ -398,24 +405,30 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         const pending = [...outstandingHistory, ...waitingForDeposit.filter((swap) => swap.exchangeId)]
         const batch = pending.slice(pollOffset, pollOffset + 5)
         pollOffset = pending.length ? (pollOffset + batch.length) % pending.length : 0
-        const refreshed = await Promise.all(batch.map(async (swap) => {
+        const statusChecks = await Promise.all(batch.map(async (swap) => {
           const isLocallyClosed = isLocallyClosedSwap(swap)
           if (isLocallyClosed) locallyClosedCheckAt.set(swap.exchangeId, Date.now())
-          const accessExpiresAt = swap.accessExpiresAt ?? (swap.createdAt ? swap.createdAt + TUNNEL_ACCESS_TTL_MS : null)
-          const closeAfterAccessWindow = swap.pending
-            && String(swap.status || '').toLowerCase() === 'waiting'
-            && Number.isFinite(accessExpiresAt)
-            && Date.now() >= accessExpiresAt
+          const requestStartedAt = Date.now()
           try {
-            if (closeAfterAccessWindow) {
-              return (await cancelPendingSwap({ exchangeId: swap.exchangeId, reason: 'access-window-ended' })).data
-            }
-            return (await refreshStatus({ exchangeId: swap.exchangeId })).data
+            return { exchangeId: swap.exchangeId, requestStartedAt, data: (await refreshStatus({ exchangeId: swap.exchangeId })).data }
           } catch {
-            return null
+            return { exchangeId: swap.exchangeId, requestStartedAt, data: null }
           }
         }))
+        const refreshed = statusChecks.flatMap((check) => check.data ? [check.data] : [])
         if (active) {
+          setStatusCheckByExchange((current) => {
+            const updated = { ...current }
+            for (const check of statusChecks) {
+              if (check.data) {
+                updated[check.exchangeId] = {
+                  requestStartedAt: check.requestStartedAt,
+                  status: String(check.data.status || '').toLowerCase(),
+                }
+              }
+            }
+            return updated
+          })
           const updatedHistory = new Map(refreshed.filter((swap) => swap && !swap.pending && !swap.discarded)
             .map((swap) => [swap.exchangeId, swap]))
           setSwapHistory((current) => {
@@ -1018,7 +1031,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           {activeTunnel && !showNewPreset && (
             <section className="panel tunnel-panel">
               <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap Tunnel Ready</h2></div><span className="live-badge">ADDRESS SHOWN FOR {formatTunnelTimeRemaining(activeTunnel.accessExpiresAt, clockNow)}</span></div>
-              <p className="field-note">This address is shown here for 7 minutes. At the next ChangeNOW check after that, AutoSwap closes the log if no deposit is detected. Late deposits are still monitored; this timer does not deactivate the ChangeNOW address.</p>
+              <p className="field-note">This address stays in the active tunnel card through the 7-minute countdown. When it ends, AutoSwap checks ChangeNOW; a Cancel option appears only after a fresh check still reports Waiting. A detected deposit removes the card sooner. The timer does not deactivate the ChangeNOW address.</p>
               {tunnelNotice && <div className="notice notice-success" role="status">{tunnelNotice}</div>}
               <p className="field-note">Send only {(activeTunnelPreset ?? selectedPreset)?.fromCurrency?.toUpperCase()} on {(activeTunnelPreset ?? selectedPreset)?.fromNetwork?.toUpperCase()} from {getSourceWalletName(activeTunnelPreset ?? selectedPreset)}. Sending another asset or network can permanently lose funds.</p>
               <div className="notice notice-warning single-use-warning">Use this deposit address once for this exchange only. Never reuse it for another quote or swap. Send the exact asset on the exact network shown above.</div>
@@ -1036,7 +1049,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               <>
                 <div className="history-list">
                   {recentSwapHistory.map((swap) => (
-                    <SwapHistoryItem key={swap.id} cancellingExchangeId={cancellingExchangeId} onCancel={closeWaitingSwap} swap={swap} />
+                    <SwapHistoryItem key={swap.id} cancellingExchangeId={cancellingExchangeId} onCancel={closeWaitingSwap} statusCheck={statusCheckByExchange[swap.exchangeId]} swap={swap} />
                   ))}
                 </div>
                 {olderWaitingSwaps.length > 0 && (
@@ -1044,7 +1057,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     <summary>Older waiting tunnels ({olderWaitingSwaps.length})</summary>
                     <div className="history-list">
                       {olderWaitingSwaps.map((swap) => (
-                        <SwapHistoryItem key={swap.id} cancellingExchangeId={cancellingExchangeId} onCancel={closeWaitingSwap} swap={swap} />
+                        <SwapHistoryItem key={swap.id} cancellingExchangeId={cancellingExchangeId} onCancel={closeWaitingSwap} statusCheck={statusCheckByExchange[swap.exchangeId]} swap={swap} />
                       ))}
                     </div>
                   </details>

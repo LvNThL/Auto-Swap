@@ -24,4 +24,27 @@ function isLocallyClosedSwap(record) {
     && ['user-requested', 'access-window-ended'].includes(record?.cancellationReason)
 }
 
-module.exports = { depositReceived, pendingHistoryStatus, isWaitingForDeposit, isLocallyClosedSwap }
+function timestampMillis(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  return typeof value?.toMillis === 'function' ? value.toMillis() : null
+}
+
+function tunnelAccessExpiresAt(record, ttlMs) {
+  const explicitExpiry = timestampMillis(record?.tunnelAccessExpiresAt)
+  if (explicitExpiry != null) return explicitExpiry
+  const openedAt = timestampMillis(record?.tunnelOpenedAt) ?? timestampMillis(record?.createdAt) ?? 0
+  return openedAt + ttlMs
+}
+
+function isTunnelAccessWindowOpen(record, now, ttlMs) {
+  return now < tunnelAccessExpiresAt(record, ttlMs)
+}
+
+module.exports = {
+  depositReceived,
+  pendingHistoryStatus,
+  isWaitingForDeposit,
+  isLocallyClosedSwap,
+  tunnelAccessExpiresAt,
+  isTunnelAccessWindowOpen,
+}
