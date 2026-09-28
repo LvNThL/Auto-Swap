@@ -19,4 +19,9 @@ function isWaitingForDeposit(status) {
   return typeof status === 'string' && status.toLowerCase() === 'waiting'
 }
 
-module.exports = { depositReceived, pendingHistoryStatus, isWaitingForDeposit }
+function isLocallyClosedSwap(record) {
+  return String(record?.status ?? '').toLowerCase() === 'cancelled'
+    && ['user-requested', 'access-window-ended'].includes(record?.cancellationReason)
+}
+
+module.exports = { depositReceived, pendingHistoryStatus, isWaitingForDeposit, isLocallyClosedSwap }

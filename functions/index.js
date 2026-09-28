@@ -6,7 +6,7 @@ const { getFirestore, Timestamp } = require('firebase-admin/firestore')
 const { getStorage } = require('firebase-admin/storage')
 const { quoteMatchesExchange, quoteMatchesPreset, quoteExpired } = require('./quote-validation')
 const { normalizeCurrencyCatalog } = require('./currency-catalog')
-const { depositReceived, pendingHistoryStatus, isWaitingForDeposit } = require('./swap-history-status')
+const { depositReceived, pendingHistoryStatus, isWaitingForDeposit, isLocallyClosedSwap } = require('./swap-history-status')
 const {
   historyArchiveMonth,
   historyArchivePath,
@@ -32,7 +32,7 @@ const CHANGE_NOW_URL = 'https://api.changenow.io/v2/exchange'
 const QUOTE_COOLDOWN_MS = 2000
 const CREATE_COOLDOWN_MS = 10000
 const QUOTE_TTL_MS = 60000
-const TUNNEL_ACCESS_TTL_MS = 10 * 60 * 1000
+const TUNNEL_ACCESS_TTL_MS = 7 * 60 * 1000
 const PENDING_SWAP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 const CURRENCY_CACHE_TTL_MS = 300000
 const SAVED_RECORD_WRITE_COOLDOWN_MS = 1000
@@ -794,7 +794,8 @@ exports.refreshSwapStatus = onCall(
     }
 
     const savedRecord = (historyDoc ?? pendingDoc).data()
-    if (historyDoc && terminalSwapStatuses.has(String(savedRecord.status).toLowerCase())) {
+    const locallyClosed = isLocallyClosedSwap(savedRecord)
+    if (historyDoc && terminalSwapStatuses.has(String(savedRecord.status).toLowerCase()) && !locallyClosed) {
       return serializeSwapHistory(historyDoc)
     }
 
@@ -807,9 +808,24 @@ exports.refreshSwapStatus = onCall(
       fromNetwork: savedRecord.fromNetwork,
       toNetwork: savedRecord.toNetwork,
     })
+    const status = result.status.toLowerCase()
+
+    if (historyDoc && locallyClosed) {
+      if (isWaitingForDeposit(status)) return serializeSwapHistory(historyDoc)
+
+      await historyDoc.ref.update({
+        status: status === 'expired' ? pendingHistoryStatus(result.status) : result.status,
+        cancellationReason: status === 'expired' ? 'provider-expired' : null,
+        ...(result.toAmount == null ? {} : { toAmount: String(result.toAmount) }),
+        ...transactionDetails,
+        updatedAt: Timestamp.fromMillis(Date.now()),
+      })
+
+      const updatedSnapshot = await historyDoc.ref.get()
+      return serializeSwapHistory(updatedSnapshot)
+    }
 
     if (pendingDoc) {
-      const status = result.status.toLowerCase()
       if (depositReceived(status)) {
         return savePendingSwapToHistory({
           uid: request.auth.uid,
@@ -872,6 +888,19 @@ exports.cancelPendingSwap = onCall(
       throw new HttpsError('not-found', 'This waiting exchange is no longer available to close.')
     }
 
+    const cancellationReason = request.data?.reason ?? 'user-requested'
+    if (!['user-requested', 'access-window-ended'].includes(cancellationReason)) {
+      throw new HttpsError('invalid-argument', 'Invalid cancellation reason.')
+    }
+    if (cancellationReason === 'access-window-ended') {
+      const openedAt = pendingDoc.get('tunnelOpenedAt')?.toMillis() ?? 0
+      const accessExpiresAt = pendingDoc.get('tunnelAccessExpiresAt')?.toMillis()
+        ?? openedAt + TUNNEL_ACCESS_TTL_MS
+      if (Date.now() < accessExpiresAt) {
+        throw new HttpsError('failed-precondition', 'This tunnel is still within its address access window.')
+      }
+    }
+
     await enforceRequestCooldown(uid, `cancel-${exchangeId}`, 5000)
     const result = await callChangeNow(`/by-id?id=${encodeURIComponent(exchangeId)}`)
     if (typeof result.status !== 'string' || !result.status.trim()) {
@@ -914,7 +943,7 @@ exports.cancelPendingSwap = onCall(
       exchangeId,
       transactionDetails,
       status: 'cancelled',
-      cancellationReason: 'user-requested',
+      cancellationReason,
     })
   },
 )
