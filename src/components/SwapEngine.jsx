@@ -52,6 +52,17 @@ function currencyGroups(currencies, isSearching = false) {
   ]
 }
 
+function CurrencyLogo({ currency, className }) {
+  const ticker = String(currency?.ticker || '?').toUpperCase()
+
+  return (
+    <span className={`currency-logo ${className}`} aria-hidden="true">
+      <span>{ticker.slice(0, 3)}</span>
+      {currency?.image && <img src={currency.image} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.visibility = 'hidden' }} onLoad={(event) => { event.currentTarget.style.visibility = 'visible' }} />}
+    </span>
+  )
+}
+
 const assetSelectStyles = {
   control: (base, state) => ({
     ...base,
@@ -83,10 +94,24 @@ const assetSelectStyles = {
 function formatCurrencyOption(currency) {
   return (
     <div className="asset-option-label">
-      <span>{currency.name}</span>
+      <span className="asset-option-main">
+        <CurrencyLogo currency={currency} className="asset-option-logo" />
+        <span>{currency.name}</span>
+      </span>
       <small>{currency.ticker.toUpperCase()} · {currency.network.toUpperCase()}</small>
     </div>
   )
+}
+
+function findCurrency(currencies, ticker, network) {
+  return currencies.find((currency) => currency.ticker === ticker && currency.network === network)
+}
+
+function getCurrencyTooltip(currency, ticker, network) {
+  const symbol = String(ticker || '').toUpperCase()
+  const networkName = String(network || '').toUpperCase()
+  const assetName = currency?.name || symbol
+  return `${assetName} · ${symbol}${networkName ? ` (${networkName})` : ''}`
 }
 
 function formatEstimatedRate(fromAmount, estimatedAmount, fromTicker, toTicker) {
@@ -221,6 +246,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [toSearch, setToSearch] = useState('')
   const [selectedId, setSelectedId] = useState(() => initialPresetView === NEW_PRESET_VIEW ? '' : initialPresetView)
   const [form, setForm] = useState(emptyPreset)
+  const [swapDestinationExtraId, setSwapDestinationExtraId] = useState('')
+  const [swapRefundExtraId, setSwapRefundExtraId] = useState('')
   const [showNewPreset, setShowNewPreset] = useState(() => initialPresetView === NEW_PRESET_VIEW)
   const [routeListScrolling, setRouteListScrolling] = useState(false)
   const routeListScrollTimeout = useRef(null)
@@ -240,7 +267,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [archiveDownloadBusy, setArchiveDownloadBusy] = useState('')
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
-  const [historyFilter, setHistoryFilter] = useState('all')
+  const [historyFilter, setHistoryFilter] = useState('in-progress-completed')
   const [cancellingExchangeId, setCancellingExchangeId] = useState('')
   const [statusCheckByExchange, setStatusCheckByExchange] = useState({})
   const [copyToast, setCopyToast] = useState(null)
@@ -255,6 +282,13 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   }
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
+  const selectedPresetFromCurrency = selectedPreset
+    ? findCurrency(currencies, selectedPreset.fromCurrency, selectedPreset.fromNetwork)
+    : null
+  const selectedPresetToCurrency = selectedPreset
+    ? findCurrency(currencies, selectedPreset.toCurrency, selectedPreset.toNetwork)
+    : null
+  const selectedPresetRefundExtraIdRequired = Boolean(selectedPreset?.refundAddress && selectedPresetFromCurrency?.requiresExtraId)
   const waitingTunnelCount = pendingSwaps.filter((swap) => String(swap.status || 'waiting').toLowerCase() === 'waiting').length
   const openTunnels = pendingSwaps
     .map((swap) => ({
@@ -338,6 +372,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     entry.purpose === 'refund' && entry.ticker === selectedFromCurrency?.ticker && entry.network === selectedFromCurrency?.network)
   const managedAddressPurpose = addressBookDialog === 'manage-destination' ? 'destination' : 'refund'
   const managedAddressEntries = addressBookEntries.filter((entry) => entry.purpose === managedAddressPurpose)
+  const addressDraftCurrency = findCurrency(currencies, addressDraft.ticker, addressDraft.network)
 
   async function loadSwapHistory() {
     const getHistory = httpsCallable(functions, 'getSwapHistory')
@@ -643,11 +678,25 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
   function updateForm(event) {
     const { name, value } = event.target
+    const receiveAssetChanged = name === 'toCurrency' || name === 'toNetwork'
+    const sendAssetChanged = name === 'fromCurrency' || name === 'fromNetwork'
+    const destinationChanged = receiveAssetChanged || name === 'destinationAddress'
+    const refundChanged = sendAssetChanged || name === 'refundAddress'
     setForm((current) => ({
       ...current,
       [name]: value,
-      ...(name === 'toCurrency' || name === 'toNetwork' ? { destinationExtraId: '' } : {}),
+      ...(receiveAssetChanged ? { destinationAddress: '' } : {}),
+      ...(destinationChanged ? { destinationExtraId: '' } : {}),
+      ...(sendAssetChanged ? { refundAddress: '' } : {}),
+      ...(refundChanged ? { refundExtraId: '' } : {}),
     }))
+    if (destinationChanged) setSwapDestinationExtraId('')
+    if (refundChanged) setSwapRefundExtraId('')
+    if (destinationChanged || refundChanged) {
+      setQuote(null)
+      setConfirming(false)
+      setError('')
+    }
   }
 
   function updateSelectedCurrency(side, currency) {
@@ -657,11 +706,20 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       ...current,
       [`${side}Currency`]: currency.ticker,
       [`${side}Network`]: currency.network,
-      ...(side === 'to' ? { destinationExtraId: '' } : {}),
-      ...(side === 'from' ? { refundExtraId: '' } : {}),
+      ...(side === 'to' ? { destinationAddress: '', destinationExtraId: '' } : {}),
+      ...(side === 'from' ? { refundAddress: '', refundExtraId: '' } : {}),
     }))
-    if (side === 'from') setFromSearch('')
-    if (side === 'to') setToSearch('')
+    if (side === 'from') {
+      setFromSearch('')
+      setSwapRefundExtraId('')
+    }
+    if (side === 'to') {
+      setToSearch('')
+      setSwapDestinationExtraId('')
+    }
+    setQuote(null)
+    setConfirming(false)
+    setError('')
   }
 
   function loadAddress(target, entryId) {
@@ -670,20 +728,21 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setForm((current) => ({
       ...current,
       ...(target === 'destination'
-        ? { destinationAddress: entry.address, destinationExtraId: entry.extraId ?? '' }
-        : { refundAddress: entry.address, refundExtraId: entry.extraId ?? '' }),
+        ? { destinationAddress: entry.address, destinationExtraId: '' }
+        : { refundAddress: entry.address, refundExtraId: '' }),
     }))
+    if (target === 'destination') setSwapDestinationExtraId('')
+    else setSwapRefundExtraId('')
   }
 
   function beginSaveAddress(purpose) {
     const currency = purpose === 'destination' ? selectedToCurrency : selectedFromCurrency
     const address = purpose === 'destination' ? form.destinationAddress : form.refundAddress
-    const extraId = purpose === 'destination' ? form.destinationExtraId : form.refundExtraId
     if (!currency || !address.trim()) {
       setError('Enter an address before saving it to your address book.')
       return
     }
-    setAddressDraft({ label: '', address: address.trim(), extraId: extraId.trim(), ticker: currency.ticker, network: currency.network, purpose })
+    setAddressDraft({ label: '', address: address.trim(), extraId: '', ticker: currency.ticker, network: currency.network, purpose })
     setAddressBookError('')
     setAddressBookDialog('save')
   }
@@ -697,7 +756,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         ...addressDraft,
         label: addressDraft.label.trim(),
         address: addressDraft.address.trim(),
-        extraId: addressDraft.extraId.trim(),
+        extraId: '',
       })
       setAddressBookEntries(await listAddressBookEntries(user.uid))
       setAddressBookDialog('')
@@ -731,10 +790,12 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       toNetwork: selectedPreset.toNetwork ?? emptyPreset.toNetwork,
       fromAmount: selectedPreset.fromAmount ?? '',
       destinationAddress: selectedPreset.destinationAddress ?? '',
-      destinationExtraId: selectedPreset.destinationExtraId ?? '',
+      destinationExtraId: '',
       refundAddress: selectedPreset.refundAddress ?? '',
-      refundExtraId: selectedPreset.refundExtraId ?? '',
+      refundExtraId: '',
     })
+    setSwapDestinationExtraId('')
+    setSwapRefundExtraId('')
     setEditingPresetId(selectedPreset.id)
     setFromSearch('')
     setToSearch('')
@@ -753,6 +814,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setForm(emptyPreset)
     setFromSearch('')
     setToSearch('')
+    setSwapDestinationExtraId('')
+    setSwapRefundExtraId('')
     setError('')
     setHistoryError('')
   }
@@ -766,6 +829,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setForm(emptyPreset)
     setFromSearch('')
     setToSearch('')
+    setSwapDestinationExtraId('')
+    setSwapRefundExtraId('')
     setError('')
     setNotice('')
     setHistoryError('')
@@ -787,9 +852,9 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         name: getPresetName(form),
         destinationAddress: form.destinationAddress.trim(),
         fromAmount: form.fromAmount.trim(),
-        destinationExtraId: form.destinationExtraId.trim(),
+        destinationExtraId: '',
         refundAddress: form.refundAddress.trim(),
-        refundExtraId: form.refundExtraId.trim(),
+        refundExtraId: '',
       }
       let savedPresetId = editingPresetId
       if (savedPresetId) {
@@ -808,6 +873,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       setShowNewPreset(false)
       setEditingPresetId('')
       setForm(emptyPreset)
+      setSwapDestinationExtraId(form.destinationExtraId.trim())
+      setSwapRefundExtraId(form.refundAddress.trim() ? form.refundExtraId.trim() : '')
       setFromSearch('')
       setToSearch('')
     } catch (saveError) {
@@ -839,9 +906,9 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       toNetwork: preset.toNetwork,
       fromAmount: preset.fromAmount,
       toAddress: preset.destinationAddress,
-      toExtraId: preset.destinationExtraId,
+      toExtraId: swapDestinationExtraId.trim(),
       refundAddress: preset.refundAddress,
-      refundExtraId: preset.refundExtraId,
+      refundExtraId: preset.refundAddress ? swapRefundExtraId.trim() : '',
       quoteId,
       presetId: preset.id,
     })
@@ -850,6 +917,18 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
   async function requestQuote() {
     if (!selectedPreset) return
+    if (currenciesLoading || !selectedPresetToCurrency) {
+      setError('AutoSwap is still checking the saved asset requirements. Wait for the currency list to finish loading before requesting a quote.')
+      return
+    }
+    if (selectedPresetToCurrency.requiresExtraId && !swapDestinationExtraId.trim()) {
+      setError(`A current destination memo or tag is required for ${selectedPreset.toCurrency.toUpperCase()} on ${selectedPreset.toNetwork.toUpperCase()}. Enter it above before requesting a quote.`)
+      return
+    }
+    if (selectedPresetRefundExtraIdRequired && !swapRefundExtraId.trim()) {
+      setError(`A current refund memo or tag is required for ${selectedPreset.fromCurrency.toUpperCase()} on ${selectedPreset.fromNetwork.toUpperCase()} because this preset includes a refund address.`)
+      return
+    }
     setBusy(true)
     setError('')
     setNotice('Checking current pair availability and a live estimate with ChangeNOW…')
@@ -864,9 +943,9 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         toNetwork: selectedPreset.toNetwork,
         fromAmount: selectedPreset.fromAmount,
         toAddress: selectedPreset.destinationAddress,
-        toExtraId: selectedPreset.destinationExtraId,
+        toExtraId: swapDestinationExtraId.trim(),
         refundAddress: selectedPreset.refundAddress,
-        refundExtraId: selectedPreset.refundExtraId,
+        refundExtraId: selectedPreset.refundAddress ? swapRefundExtraId.trim() : '',
         presetId: selectedPreset.id,
       })
       setQuote(result.data)
@@ -907,6 +986,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       setTunnel({ ...created, presetId: selectedPreset.id, accessExpiresAt: tunnelAccessExpiresAt })
       setTunnelPreset(selectedPreset)
       setQuote(null)
+      setSwapDestinationExtraId('')
+      setSwapRefundExtraId('')
       setHistoryError(created.trackingSaved ? '' : 'Automatic tracking for this exchange could not be saved. It may not appear in history automatically. Keep the exchange ID in its deposit details, if available, to check its status with ChangeNOW.')
       if (created.trackingSaved && created.id) {
         setPendingSwaps((current) => [{
@@ -965,6 +1046,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                 key={preset.id}
                 onClick={() => {
                   setSelectedId(preset.id)
+                  setSwapDestinationExtraId('')
+                  setSwapRefundExtraId('')
                   savePresetView(user.uid, preset.id)
                   setShowNewPreset(false)
                   setEditingPresetId('')
@@ -988,7 +1071,15 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
         <section className="desk-content">
           <div className="page-heading">
-            <div><p className="eyebrow">POWERED BY CHANGENOW</p><h1>Route Desk</h1></div>
+            <div>
+              <div className="provider-attribution">
+                <p className="eyebrow">POWERED BY CHANGENOW</p>
+                <a className="provider-site-icon" aria-label="Visit ChangeNOW's website" href="https://changenow.io/" rel="noopener noreferrer" target="_blank" title="Visit ChangeNOW">
+                  <img src="https://changenow.io/favicon.ico" alt="" />
+                </a>
+              </div>
+              <h1>Route Desk</h1>
+            </div>
             {selectedPreset && !showNewPreset && <button className="button button-quiet delete-button" onClick={removePreset} type="button">Delete route</button>}
           </div>
 
@@ -1076,7 +1167,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   Enter the amount you plan to send to ChangeNOW. The estimated receive amount appears after you request a quote.
                 </p>
                 <label className="field-wide">Destination address<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder="Address on the selected receive network" required /></label>
-                {(selectedToCurrency?.requiresExtraId || selectedToCurrency?.supportsExtraId) && <label className="field-wide">Destination memo or tag{selectedToCurrency.requiresExtraId ? '' : ' (Optional)'}<input name="destinationExtraId" value={form.destinationExtraId} onChange={updateForm} autoComplete="off" placeholder={selectedToCurrency.requiresExtraId ? 'Required by this asset' : 'Optional memo or tag'} required={selectedToCurrency.requiresExtraId} /></label>}
+                {(selectedToCurrency?.requiresExtraId || selectedToCurrency?.supportsExtraId) && <label className="field-wide preset-memo-field">Destination memo or tag{selectedToCurrency.requiresExtraId ? ' (Required for each swap)' : ' (Optional)'}<input autoComplete="off" name="destinationExtraId" onChange={updateForm} placeholder={selectedToCurrency.requiresExtraId ? 'Enter the current destination memo or tag' : 'Enter an optional destination memo or tag'} value={form.destinationExtraId} /><small>{selectedToCurrency.requiresExtraId ? 'A value is required before requesting a quote.' : 'Only enter one if ChangeNOW or the receiving wallet provides it.'} This value applies to the swap you open now and will not be saved with the preset.</small></label>}
                 <div className="address-tools field-wide">
                   <select aria-label="Load a saved destination address" value="" onChange={(event) => loadAddress('destination', event.target.value)}>
                     <option value="">Load a saved destination address…</option>
@@ -1086,7 +1177,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   <button className="button button-quiet" onClick={() => setAddressBookDialog('manage-destination')} type="button">Manage address book</button>
                 </div>
                 <label className="field-wide">Refund address <span className="optional-label">Optional. Used only if the exchange refunds the swap.</span><input name="refundAddress" value={form.refundAddress} onChange={updateForm} autoComplete="off" placeholder="Crypto address on the send network" /></label>
-                {(selectedFromCurrency?.requiresExtraId || selectedFromCurrency?.supportsExtraId) && <label className="field-wide">Refund memo or tag<input name="refundExtraId" value={form.refundExtraId} onChange={updateForm} autoComplete="off" placeholder="Optional refund memo or tag" /></label>}
+                {form.refundAddress && (selectedFromCurrency?.requiresExtraId || selectedFromCurrency?.supportsExtraId) && <label className="field-wide preset-memo-field">Refund memo or tag{selectedFromCurrency.requiresExtraId ? ' (Required for this refund address)' : ' (Optional)'}<input autoComplete="off" name="refundExtraId" onChange={updateForm} placeholder={selectedFromCurrency.requiresExtraId ? 'Enter the current refund memo or tag' : 'Enter an optional refund memo or tag'} value={form.refundExtraId} /><small>Used only with this refund address for the swap you open now. This value will not be saved with the preset.</small></label>}
                 <div className="address-tools field-wide">
                   <select aria-label="Load a saved refund address" value="" onChange={(event) => loadAddress('refund', event.target.value)}>
                     <option value="">Load a saved refund address…</option>
@@ -1125,7 +1216,36 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                 <div className="summary-destination"><span className="summary-label">TO</span><strong>{getDestinationWalletName(selectedPreset)}</strong></div>
               </section>
               <section className="panel active-route-panel">
-                <div className="panel-heading"><div><p className="eyebrow">ACTIVE PRESET</p><h2>{getPresetName(selectedPreset)}</h2></div><span className="panel-index">01 / ROUTE</span></div>
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">ACTIVE PRESET</p>
+                    <h2 className="active-preset-symbols" aria-label={getPresetName(selectedPreset)}>
+                      <span className="active-preset-symbol" title={getCurrencyTooltip(selectedPresetFromCurrency, selectedPreset.fromCurrency, selectedPreset.fromNetwork)}>
+                        <CurrencyLogo currency={selectedPresetFromCurrency ?? { ticker: selectedPreset.fromCurrency }} className="active-preset-logo" />
+                      </span>
+                      <span className="active-preset-direction" aria-hidden="true">→</span>
+                      <span className="active-preset-symbol" title={getCurrencyTooltip(selectedPresetToCurrency, selectedPreset.toCurrency, selectedPreset.toNetwork)}>
+                        <CurrencyLogo currency={selectedPresetToCurrency ?? { ticker: selectedPreset.toCurrency }} className="active-preset-logo" />
+                      </span>
+                    </h2>
+                  </div>
+                  <span className="panel-index">01 / ROUTE</span>
+                </div>
+                {selectedPresetToCurrency?.requiresExtraId && <div className="notice notice-warning preset-extra-id-warning" role="status">This preset requires a current destination memo or tag. Enter the value provided for this swap; it is not saved with the preset.</div>}
+                {(selectedPresetToCurrency?.requiresExtraId || selectedPresetToCurrency?.supportsExtraId || (selectedPreset?.refundAddress && (selectedPresetFromCurrency?.requiresExtraId || selectedPresetFromCurrency?.supportsExtraId))) && <div className="preset-extra-id-fields">
+                  {(selectedPresetToCurrency?.requiresExtraId || selectedPresetToCurrency?.supportsExtraId) && (
+                    <label>Destination memo or tag{selectedPresetToCurrency.requiresExtraId ? ' (Required)' : ' (Optional)'}
+                      <input autoComplete="off" onChange={(event) => { setSwapDestinationExtraId(event.target.value); setQuote(null); setConfirming(false); setError('') }} placeholder={selectedPresetToCurrency.requiresExtraId ? 'Enter the current required memo or tag' : 'Enter a memo or tag if required by this deposit'} required={selectedPresetToCurrency.requiresExtraId} value={swapDestinationExtraId} />
+                      <small>Use the current value for this swap. It will not be saved with the preset.</small>
+                    </label>
+                  )}
+                  {selectedPreset?.refundAddress && (selectedPresetFromCurrency?.requiresExtraId || selectedPresetFromCurrency?.supportsExtraId) && (
+                    <label>Refund memo or tag{selectedPresetRefundExtraIdRequired ? ' (Required)' : ' (Optional)'}
+                      <input autoComplete="off" onChange={(event) => { setSwapRefundExtraId(event.target.value); setQuote(null); setConfirming(false); setError('') }} placeholder={selectedPresetRefundExtraIdRequired ? 'Enter the current required refund memo or tag' : 'Enter a refund memo or tag if required'} required={selectedPresetRefundExtraIdRequired} value={swapRefundExtraId} />
+                      <small>Used only if ChangeNOW refunds this swap. It will not be saved with the preset.</small>
+                    </label>
+                  )}
+                </div>}
                 <div className="detail-grid">
                   <div><span>Send amount</span><strong>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()}</strong></div>
                   <div><span>Deposit network</span><strong>{selectedPreset.fromNetwork?.toUpperCase()}</strong></div>
@@ -1248,7 +1368,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               <form className="address-save-form" onSubmit={saveAddress}>
                 <p className="muted">{addressDraft.ticker.toUpperCase()} on {addressDraft.network.toUpperCase()} · {addressDraft.purpose === 'destination' ? 'Destination' : 'Refund'} address</p>
                 <label>Address label<input autoFocus maxLength="48" onChange={(event) => setAddressDraft((draft) => ({ ...draft, label: event.target.value }))} placeholder="For example, Main wallet" required value={addressDraft.label} /></label>
-                <div className="address-preview"><code>{addressDraft.address}</code>{addressDraft.extraId && <small>Memo or tag: {addressDraft.extraId}</small>}</div>
+                <div className="address-preview"><code>{addressDraft.address}</code></div>
+                {(addressDraftCurrency?.requiresExtraId || addressDraftCurrency?.supportsExtraId) && <p className="notice notice-warning address-book-tag-notice">Memos and tags are not saved with addresses. Enter the current value for each swap.</p>}
                 <div className="form-actions"><button className="button button-quiet" onClick={() => setAddressBookDialog('')} type="button">Cancel</button><button className="button button-primary" disabled={addressBookBusy} type="submit">{addressBookBusy ? 'Saving…' : 'Save address'}</button></div>
               </form>
             ) : (
@@ -1257,7 +1378,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   ? <p className="muted">No saved {managedAddressPurpose} addresses yet.</p>
                   : <ul className="address-book-list">{managedAddressEntries.map((entry) => (
                     <li className="address-book-item" key={entry.id}>
-                      <div><strong>{entry.label}</strong><span>{entry.ticker.toUpperCase()} · {entry.network.toUpperCase()}</span><code>{entry.address}</code>{entry.extraId && <small>Memo or tag: {entry.extraId}</small>}</div>
+                      <div><strong>{entry.label}</strong><span>{entry.ticker.toUpperCase()} · {entry.network.toUpperCase()}</span><code>{entry.address}</code>{entry.extraId && <small>Previously saved memo or tag (not applied): {entry.extraId}</small>}</div>
                       <button className="button button-quiet" disabled={addressBookBusy} onClick={() => removeAddress(entry)} type="button">Remove</button>
                     </li>
                   ))}</ul>}
@@ -1281,9 +1402,9 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               {estimatedRate && <div><dt>Estimated rate</dt><dd><code>{estimatedRate}</code><br />Based on this quote and send amount; not a fixed rate.</dd></div>}
               <div><dt>Minimum send</dt><dd>{quote.minimumAmount} {selectedPreset.fromCurrency?.toUpperCase()}</dd></div>
               <div><dt>Destination</dt><dd>{getDestinationWalletName(selectedPreset)}<br /><code>{selectedPreset.destinationAddress}</code></dd></div>
-              {selectedPreset.destinationExtraId && <div><dt>Memo or tag</dt><dd><code>{selectedPreset.destinationExtraId}</code></dd></div>}
+              {swapDestinationExtraId && <div><dt>Memo or tag</dt><dd><code>{swapDestinationExtraId}</code></dd></div>}
               {selectedPreset.refundAddress && <div><dt>Refund address</dt><dd><code>{selectedPreset.refundAddress}</code></dd></div>}
-              {selectedPreset.refundExtraId && <div><dt>Refund memo or tag</dt><dd><code>{selectedPreset.refundExtraId}</code></dd></div>}
+              {swapRefundExtraId && <div><dt>Refund memo or tag</dt><dd><code>{swapRefundExtraId}</code></dd></div>}
             </dl>
             {quote.warningMessage && <p className="modal-warning">{quote.warningMessage}</p>}
             {waitingTunnelCount >= MAX_WAITING_TUNNELS && <p className="modal-warning">All 3 waiting-for-deposit slots are in use. Wait for a deposit or close a waiting tunnel before opening another.</p>}

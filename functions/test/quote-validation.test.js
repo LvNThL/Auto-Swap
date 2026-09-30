@@ -48,6 +48,11 @@ test('matches a quote to the saved preset details', () => {
   }
 
   assert.equal(quoteMatchesPreset(preset, exchange), true)
+  assert.equal(quoteMatchesPreset({ ...preset, destinationExtraId: 'legacy-tag', refundExtraId: 'legacy-refund-tag' }, {
+    ...exchange,
+    toExtraId: 'current-deposit-tag',
+    refundExtraId: 'current-refund-tag',
+  }), true)
   assert.equal(quoteMatchesPreset({ ...preset, destinationAddress: 'other-address' }, exchange), false)
   assert.equal(quoteMatchesPreset({ ...preset, fromAmount: '0.5' }, exchange), false)
 })

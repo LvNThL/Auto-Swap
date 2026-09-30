@@ -9,13 +9,14 @@ const EXCHANGE_FIELDS = [
   'refundAddress',
   'refundExtraId',
 ]
+const PRESET_MATCH_FIELDS = EXCHANGE_FIELDS.filter((field) => field !== 'toExtraId' && field !== 'refundExtraId')
 
 function quoteMatchesExchange(quote, exchange) {
   return EXCHANGE_FIELDS.every((field) => quote[field] === exchange[field])
 }
 
 function quoteMatchesPreset(preset, exchange) {
-  return quoteMatchesExchange({
+  const presetExchange = {
     fromCurrency: preset?.fromCurrency,
     fromNetwork: preset?.fromNetwork,
     toCurrency: preset?.toCurrency,
@@ -25,7 +26,8 @@ function quoteMatchesPreset(preset, exchange) {
     toExtraId: preset?.destinationExtraId ?? '',
     refundAddress: preset?.refundAddress ?? '',
     refundExtraId: preset?.refundExtraId ?? '',
-  }, exchange)
+  }
+  return PRESET_MATCH_FIELDS.every((field) => presetExchange[field] === exchange[field])
 }
 
 function quoteExpired(expiresAt, now = Date.now()) {
