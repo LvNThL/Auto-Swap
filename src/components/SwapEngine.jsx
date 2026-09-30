@@ -471,18 +471,20 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           setSwapHistory(data.swaps ?? [])
           setPendingSwaps(data.pendingSwaps ?? [])
         }
+        return data
       } catch {
         if (active) setHistoryError("We couldn't load exchange activity just now. This doesn't mean your swap failed. Please refresh in a moment.")
+        return null
       } finally {
         if (active) setHistoryLoading(false)
       }
     }
 
-    async function pollHistory() {
+    async function pollHistory(initialData = null) {
       if (polling) return
       polling = true
       try {
-        const { data } = await getHistory({})
+        const data = initialData ?? (await getHistory({})).data
         const swaps = data.swaps ?? []
         const waitingForDeposit = data.pendingSwaps ?? []
         if (!active) return
@@ -496,6 +498,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           return !isLocallyClosed || Date.now() - (locallyClosedCheckAt.get(swap.exchangeId) ?? 0) >= 5 * 60 * 1000
         })
         const pending = [...outstandingHistory, ...waitingForDeposit.filter((swap) => swap.exchangeId)]
+          .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
         const batch = pending.slice(pollOffset, pollOffset + 5)
         pollOffset = pending.length ? (pollOffset + batch.length) % pending.length : 0
         const statusChecks = await Promise.all(batch.map(async (swap) => {
@@ -545,7 +548,9 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       }
     }
 
-    loadHistory()
+    loadHistory().then((data) => {
+      if (active && data) pollHistory(data)
+    })
     loadHistoryArchives().catch(() => {
       if (active) setArchiveError('Monthly archives could not be loaded. Your current swap history is unaffected.')
     })
