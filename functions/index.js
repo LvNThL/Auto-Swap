@@ -23,8 +23,7 @@ const {
 } = require('./history-archive')
 const { extractTransactionHistoryDetails } = require('./transaction-history-details')
 const {
-  MAX_OPEN_TUNNELS_PER_USER,
-  collectActiveTunnelIds,
+  collectWaitingTunnelIds,
   reserveTunnelId,
   isConfirmedCreateFailure,
 } = require('./tunnel-capacity')
@@ -121,12 +120,10 @@ async function savePendingSwapToHistory({ uid, pendingDoc, exchangeId, transacti
       updatedAt: now,
     })
     transaction.delete(pendingDoc.ref)
-    if (!isLocalClose) {
-      transaction.set(capacityRef, {
-        activeTunnelIds: (capacitySnapshot.data()?.activeTunnelIds ?? []).filter((id) => id !== pendingDoc.id),
-        updatedAt: now,
-      }, { merge: true })
-    }
+    transaction.set(capacityRef, {
+      activeTunnelIds: (capacitySnapshot.data()?.activeTunnelIds ?? []).filter((id) => id !== pendingDoc.id),
+      updatedAt: now,
+    }, { merge: true })
   })
 
   const historySnapshot = await historyRef.get()
@@ -315,16 +312,14 @@ async function consumeQuote(uid, quoteId, exchange, presetId) {
   const userRef = database.collection('users').doc(uid)
   const capacityRef = userRef.collection('_privateMeta').doc('tunnelCapacity')
   const pendingQuery = userRef.collection('swapQuotes').where('trackingStatus', '==', 'pending')
-  const closedQuery = userRef.collection('swapHistory').where('cancellationReason', 'in', ['user-requested', 'access-window-ended'])
 
   await database.runTransaction(async (transaction) => {
-    const [quoteSnapshot, presetSnapshot, rateLimitSnapshot, capacitySnapshot, pendingSnapshot, closedSnapshot] = await Promise.all([
+    const [quoteSnapshot, presetSnapshot, rateLimitSnapshot, capacitySnapshot, pendingSnapshot] = await Promise.all([
       transaction.get(quoteRef),
       transaction.get(presetRef),
       transaction.get(rateLimitRef),
       transaction.get(capacityRef),
       transaction.get(pendingQuery),
-      transaction.get(closedQuery),
     ])
 
     if (!quoteSnapshot.exists) {
@@ -354,14 +349,18 @@ async function consumeQuote(uid, quoteId, exchange, presetId) {
       throw new HttpsError('resource-exhausted', 'Wait a few seconds before creating another tunnel.')
     }
 
-    const activeTunnelIds = collectActiveTunnelIds(
-      capacitySnapshot.data()?.activeTunnelIds ?? [],
+    const reservedIds = [...new Set(capacitySnapshot.data()?.activeTunnelIds ?? [])]
+    const reservationSnapshots = await Promise.all(reservedIds
+      .filter((id) => typeof id === 'string')
+      .map((id) => transaction.get(userRef.collection('swapQuotes').doc(id))))
+    const activeTunnelIds = collectWaitingTunnelIds(
+      reservedIds,
       pendingSnapshot.docs.map((document) => ({ id: document.id, ...document.data() })),
-      closedSnapshot.docs.map((document) => ({ id: document.id, ...document.data() })),
+      reservationSnapshots.map((snapshot) => ({ id: snapshot.id, exists: snapshot.exists, ...snapshot.data() })),
     )
     const reservedTunnelIds = reserveTunnelId(activeTunnelIds, quoteId)
     if (!reservedTunnelIds) {
-      throw new HttpsError('resource-exhausted', 'This account already has 3 provider-live tunnels. Wait for a deposit or provider-confirmed expiry before opening another.')
+      throw new HttpsError('resource-exhausted', 'This account already has 3 tunnels waiting for a deposit. Wait for a deposit or close a waiting tunnel before opening another.')
     }
 
     transaction.update(quoteRef, { consumedAt: Timestamp.fromMillis(now) })
@@ -650,6 +649,7 @@ exports.createSwapTunnel = onCall(
           expiresAt: Timestamp.fromMillis(tunnelOpenedAt + PENDING_SWAP_RETENTION_MS),
         })
         trackingSaved = true
+        if (!isWaitingForDeposit(result.status ?? 'waiting')) await releaseTunnelSlot(uid, quoteId)
       } catch (trackingError) {
         console.error('Could not save pending swap tracking:', trackingError.message)
       }
@@ -943,6 +943,7 @@ exports.refreshSwapStatus = onCall(
       }
 
       await pendingDoc.ref.update({ ...transactionDetails, status: result.status, updatedAt: Timestamp.fromMillis(Date.now()) })
+      if (!isWaitingForDeposit(status)) await releaseTunnelSlot(request.auth.uid, pendingDoc.id)
       return { id: pendingDoc.id, exchangeId, status: result.status, ...transactionDetails, pending: true }
     }
 

@@ -1,14 +1,14 @@
 const assert = require('node:assert/strict')
 const test = require('node:test')
 const {
-  MAX_OPEN_TUNNELS_PER_USER,
-  collectActiveTunnelIds,
+  MAX_WAITING_TUNNELS_PER_USER,
+  collectWaitingTunnelIds,
   reserveTunnelId,
   isConfirmedCreateFailure,
 } = require('../tunnel-capacity')
 
-test('reserves the first three provider-live tunnel slots and rejects a fourth', () => {
-  assert.equal(MAX_OPEN_TUNNELS_PER_USER, 3)
+test('reserves three locally waiting tunnel slots and rejects a fourth', () => {
+  assert.equal(MAX_WAITING_TUNNELS_PER_USER, 3)
   const first = reserveTunnelId([], 'quote-1')
   const second = reserveTunnelId(first, 'quote-2')
   const third = reserveTunnelId(second, 'quote-3')
@@ -17,26 +17,41 @@ test('reserves the first three provider-live tunnel slots and rejects a fourth',
   assert.equal(reserveTunnelId(third, 'quote-4'), null)
 })
 
-test('keeps locally closed waiting tunnels reserved but ignores provider-confirmed terminal records', () => {
-  const activeIds = collectActiveTunnelIds(
-    ['reserved-1'],
+test('counts locally waiting pending records but not progressed or closed records', () => {
+  const waitingIds = collectWaitingTunnelIds(
+    [],
     [
-      { id: 'waiting-2', status: 'waiting' },
-      { id: 'expired-3', status: 'expired' },
-      { id: 'released-4', providerLiveTunnel: false, status: 'waiting' },
+      { id: 'waiting-1', status: 'waiting' },
+      { id: 'progressed-2', status: 'confirming' },
     ],
+    [],
+  )
+
+  assert.deepEqual(waitingIds, ['waiting-1'])
+})
+
+test('drops stale reservations and retains only unresolved or locally waiting reservations', () => {
+  const waitingIds = collectWaitingTunnelIds(
+    ['closed-1', 'creating-2', 'progressed-3', 'waiting-4'],
+    [{ id: 'waiting-4', status: 'waiting' }],
     [
-      { id: 'closed-5', status: 'cancelled', cancellationReason: 'user-requested' },
-      { id: 'closed-6', status: 'cancelled', cancellationReason: 'access-window-ended', providerLiveTunnel: false },
+      { id: 'closed-1', exists: false },
+      { id: 'creating-2', exists: true, consumedAt: 123 },
+      { id: 'progressed-3', exists: true, consumedAt: 123, trackingStatus: 'pending', status: 'confirming' },
+      { id: 'waiting-4', exists: true, consumedAt: 123, trackingStatus: 'pending', status: 'waiting' },
     ],
   )
 
-  assert.deepEqual(activeIds, ['reserved-1', 'waiting-2', 'closed-5'])
+  assert.deepEqual(waitingIds, ['waiting-4', 'creating-2'])
 })
 
 test('deduplicates reservations against their pending provider record', () => {
   assert.deepEqual(
-    collectActiveTunnelIds(['quote-1'], [{ id: 'quote-1', status: 'waiting' }], []),
+    collectWaitingTunnelIds(
+      ['quote-1'],
+      [{ id: 'quote-1', status: 'waiting' }],
+      [{ id: 'quote-1', exists: true, consumedAt: 123, trackingStatus: 'pending', status: 'waiting' }],
+    ),
     ['quote-1'],
   )
 })

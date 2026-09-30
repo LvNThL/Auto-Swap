@@ -137,6 +137,7 @@ function formatTunnelTimeRemaining(expiresAt, now) {
 
 const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
 const depositReceivedStatuses = new Set(['confirming', 'exchanging', 'sending', 'finished', 'failed', 'refunded'])
+const MAX_WAITING_TUNNELS = 3
 const autoSwapClosureReasons = new Set(['user-requested', 'access-window-ended'])
 
 function isLocallyClosedSwap(swap) {
@@ -221,6 +222,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [clockNow, setClockNow] = useState(() => Date.now())
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
+  const waitingTunnelCount = pendingSwaps.filter((swap) => String(swap.status || 'waiting').toLowerCase() === 'waiting').length
   const openTunnels = pendingSwaps
     .map((swap) => ({
       ...swap,
@@ -785,6 +787,10 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
   async function confirmSwap() {
     if (!selectedPreset || !quote?.quoteId) return
+    if (waitingTunnelCount >= MAX_WAITING_TUNNELS) {
+      setError('This account already has 3 tunnels waiting for a deposit. Wait for a deposit or close a waiting tunnel before opening another.')
+      return
+    }
     if (Date.now() >= quote.quoteExpiresAt) {
       setQuote(null)
       setConfirming(false)
@@ -1139,8 +1145,9 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               {selectedPreset.refundExtraId && <div><dt>Refund memo or tag</dt><dd><code>{selectedPreset.refundExtraId}</code></dd></div>}
             </dl>
             {quote.warningMessage && <p className="modal-warning">{quote.warningMessage}</p>}
+            {waitingTunnelCount >= MAX_WAITING_TUNNELS && <p className="modal-warning">All 3 waiting-for-deposit slots are in use. Wait for a deposit or close a waiting tunnel before opening another.</p>}
             <p className="modal-warning">This standard-flow estimate is indicative and may change. Confirming creates the exchange. Your wallet will ask for separate approval before sending funds.</p>
-            <div className="form-actions"><button className="button button-quiet" onClick={() => setConfirming(false)} type="button">Go back</button><button className="button button-primary" disabled={busy} onClick={confirmSwap} type="button">{busy ? 'Creating tunnel…' : 'Confirm & create tunnel'}</button></div>
+            <div className="form-actions"><button className="button button-quiet" onClick={() => setConfirming(false)} type="button">Go back</button><button className="button button-primary" disabled={busy || waitingTunnelCount >= MAX_WAITING_TUNNELS} onClick={confirmSwap} type="button">{busy ? 'Creating tunnel…' : 'Confirm & create tunnel'}</button></div>
           </section>
         </div>
       )}
