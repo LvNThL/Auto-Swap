@@ -5,7 +5,7 @@ const { normalizeCurrencyCatalog } = require('../currency-catalog')
 test('normalizes crypto assets and filters fiat and malformed records', () => {
   const currencies = normalizeCurrencyCatalog([
     { ticker: 'ETH', name: 'Ethereum', network: 'ETH', image: '/eth.svg', featured: true, buy: true, sell: true },
-    { ticker: 'XRP', name: 'XRP', network: 'xrp', hasExternalId: true, buy: true, sell: true },
+    { ticker: 'XRP', name: 'XRP', network: 'xrp', hasExternalId: true, isExtraIdSupported: true, buy: true, sell: true },
     { ticker: 'SOURCE', name: 'Source Only', network: 'src', buy: false, sell: true },
     { ticker: 'USD', name: 'US Dollar', network: 'usd', isFiat: true },
     { ticker: '', name: 'Invalid', network: 'test' },
@@ -23,6 +23,8 @@ test('normalizes crypto assets and filters fiat and malformed records', () => {
       featured: true,
       tokenContract: null,
       hasExternalId: false,
+      requiresExtraId: false,
+      supportsExtraId: false,
     },
     {
       id: 'source:src',
@@ -35,6 +37,8 @@ test('normalizes crypto assets and filters fiat and malformed records', () => {
       featured: false,
       tokenContract: null,
       hasExternalId: false,
+      requiresExtraId: false,
+      supportsExtraId: false,
     },
     {
       id: 'xrp:xrp',
@@ -47,7 +51,23 @@ test('normalizes crypto assets and filters fiat and malformed records', () => {
       featured: false,
       tokenContract: null,
       hasExternalId: true,
+      requiresExtraId: true,
+      supportsExtraId: true,
     },
+  ])
+})
+
+test('distinguishes required extra IDs from optional extra-ID support', () => {
+  const currencies = normalizeCurrencyCatalog([
+    { ticker: 'xrp', name: 'Ripple', network: 'xrp', hasExternalId: true, isExtraIdSupported: true, buy: true, sell: true },
+    { ticker: 'usdt', name: 'Tether USD (TON)', network: 'ton', hasExternalId: false, isExtraIdSupported: true, buy: true, sell: true },
+    { ticker: 'neiroeth', name: 'Neiro Ethereum', network: 'eth', hasExternalId: true, isExtraIdSupported: false, buy: true, sell: true },
+  ])
+
+  assert.deepEqual(currencies.map(({ ticker, hasExternalId, requiresExtraId, supportsExtraId }) => ({ ticker, hasExternalId, requiresExtraId, supportsExtraId })), [
+    { ticker: 'neiroeth', hasExternalId: true, requiresExtraId: true, supportsExtraId: false },
+    { ticker: 'xrp', hasExternalId: true, requiresExtraId: true, supportsExtraId: true },
+    { ticker: 'usdt', hasExternalId: true, requiresExtraId: false, supportsExtraId: true },
   ])
 })
 

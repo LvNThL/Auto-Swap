@@ -1054,7 +1054,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   Enter the amount you plan to send to ChangeNOW. The estimated receive amount appears after you request a quote.
                 </p>
                 <label className="field-wide">Destination address<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder="Address on the selected receive network" required /></label>
-                {selectedToCurrency?.hasExternalId && <label className="field-wide">Destination memo or tag<input name="destinationExtraId" value={form.destinationExtraId} onChange={updateForm} autoComplete="off" placeholder="Required by this asset" required /></label>}
+                {(selectedToCurrency?.requiresExtraId || selectedToCurrency?.supportsExtraId) && <label className="field-wide">Destination memo or tag{selectedToCurrency.requiresExtraId ? '' : ' (Optional)'}<input name="destinationExtraId" value={form.destinationExtraId} onChange={updateForm} autoComplete="off" placeholder={selectedToCurrency.requiresExtraId ? 'Required by this asset' : 'Optional memo or tag'} required={selectedToCurrency.requiresExtraId} /></label>}
                 <div className="address-tools field-wide">
                   <select aria-label="Load a saved destination address" value="" onChange={(event) => loadAddress('destination', event.target.value)}>
                     <option value="">Load a saved destination address…</option>
@@ -1064,7 +1064,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   <button className="button button-quiet" onClick={() => setAddressBookDialog('manage-destination')} type="button">Manage address book</button>
                 </div>
                 <label className="field-wide">Refund address <span className="optional-label">Optional. Used only if the exchange refunds the swap.</span><input name="refundAddress" value={form.refundAddress} onChange={updateForm} autoComplete="off" placeholder="Crypto address on the send network" /></label>
-                {selectedFromCurrency?.hasExternalId && <label className="field-wide">Refund memo or tag<input name="refundExtraId" value={form.refundExtraId} onChange={updateForm} autoComplete="off" placeholder="Optional refund memo or tag" /></label>}
+                {(selectedFromCurrency?.requiresExtraId || selectedFromCurrency?.supportsExtraId) && <label className="field-wide">Refund memo or tag<input name="refundExtraId" value={form.refundExtraId} onChange={updateForm} autoComplete="off" placeholder="Optional refund memo or tag" /></label>}
                 <div className="address-tools field-wide">
                   <select aria-label="Load a saved refund address" value="" onChange={(event) => loadAddress('refund', event.target.value)}>
                     <option value="">Load a saved refund address…</option>

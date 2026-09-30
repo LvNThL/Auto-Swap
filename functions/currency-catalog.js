@@ -31,6 +31,8 @@ function normalizeCurrencyCatalog(payload) {
       featured: record.featured === true,
       tokenContract: typeof record.tokenContract === 'string' ? record.tokenContract : null,
       hasExternalId: record.hasExternalId === true || record.isExtraIdSupported === true,
+      requiresExtraId: record.hasExternalId === true,
+      supportsExtraId: record.isExtraIdSupported === true,
     })
   }
 
