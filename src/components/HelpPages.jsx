@@ -6,21 +6,21 @@ import BrandMark from './BrandMark.jsx'
 
 const faqSections = [
   {
-    title: 'Creating a swap',
+    title: 'Swaps',
     entries: [
-      ['Are quotes final?', 'No. A quote is an estimate for the selected pair, networks, amount, and destination. Rates and the amount received can change before the exchange finishes. Review the live quote before creating a deposit tunnel.'],
-      ['How do I send a deposit?', 'Send only the specified asset on the displayed deposit network to the address for that tunnel. Check the currency, network, amount, and any required memo or tag before confirming in your wallet.'],
-      ['Does AutoSwap hold my wallet keys?', 'No. AutoSwap does not request or store wallet recovery phrases or private keys. Sending funds requires a separate approval in your wallet.'],
+      ['Can my quote change?', 'Yes. It’s an estimate; the final amount may change before the exchange completes.'],
+      ['How do I send funds?', 'AutoSwap creates the exchange but never sends funds. Send the exact asset and amount to the displayed network address. Include any required memo or tag.'],
+      ['Does AutoSwap connect to my wallet?', 'No. Send from your wallet or exchange. AutoSwap never asks for your recovery phrase or keys.'],
     ],
   },
   {
-    title: 'Deposit tunnels and status',
+    title: 'Deposits and tracking',
     entries: [
-      ['What happens when the address timer ends?', 'The address is removed from the active deposit details after seven minutes. Do not send funds to an address after its timer ends. The timer only controls how long the address is shown in AutoSwap; it does not deactivate the exchange with the provider.'],
-      ['What does “Cancel in Auto Swap” do?', 'It closes local tracking for a tunnel that the provider still reports as waiting for a deposit. It does not cancel the provider exchange or deactivate its deposit address. Only close a tunnel if you have not sent funds.'],
-      ['Why am I asked to cancel an expired tunnel?', 'AutoSwap checks the provider after the address timer ends. If the provider still reports “Waiting,” you must close that tunnel in AutoSwap before it leaves your open tunnels list. If a deposit has been detected, the swap continues to appear in activity instead.'],
-      ['Why can I only have three waiting tunnels?', 'AutoSwap allows up to three of your locally tracked tunnels to wait for a deposit at one time. Once a deposit is detected or you close a waiting tunnel in AutoSwap, you can open another.'],
-      ['What if I sent a deposit but the status has not changed?', 'Allow time for the network and provider to detect it. Keep your wallet transaction details, and do not close a tunnel if you sent funds. AutoSwap refreshes exchange activity periodically.'],
+      ['What does the 7-minute timer mean?', 'It controls how long the address is shown here. It does not cancel the ChangeNOW exchange. Don’t send to an expired address.'],
+      ['What does “Close in AutoSwap” do?', 'It closes tracking here, not the ChangeNOW exchange. Close only if you have not sent funds.'],
+      ['Why can’t I close an expired tunnel yet?', 'AutoSwap checks ChangeNOW first. The close option appears only if it still reports “Waiting.”'],
+      ['Why can I have only three waiting tunnels?', 'You can have three tunnels waiting for deposits. Deposit to or close an unfunded tunnel before opening another.'],
+      ['I sent funds, but the status hasn’t changed. What now?', 'Don’t resend or close the tunnel. Network detection can take time. Keep your transaction ID; status refreshes automatically.'],
     ],
   },
 ]
@@ -35,9 +35,9 @@ export default function HelpPages({ page, activePage, user, themePreference, onT
     setAccountMessage('')
     try {
       await sendPasswordResetEmail(auth, user.email)
-      setAccountMessage('Password reset instructions were sent to your email. Check your spam or junk folder if they do not arrive.')
+      setAccountMessage('Reset email sent. Check your spam folder if needed.')
     } catch {
-      setAccountMessage('Password reset instructions could not be sent. Please try again later.')
+      setAccountMessage("Couldn't send reset email. Try again.")
     } finally {
       setResetBusy(false)
     }
@@ -56,9 +56,7 @@ export default function HelpPages({ page, activePage, user, themePreference, onT
         {page === 'faq' ? (
           <>
             <div className="information-heading">
-              <p className="eyebrow">AUTOSWAP ROUTE DESK</p>
-              <h1>Frequently Asked Questions</h1>
-              <p className="muted">Clear answers about quotes, deposits, and exchange status.</p>
+              <h1>FAQ</h1>
             </div>
             <div className="faq-sections">
               {faqSections.map((section) => (

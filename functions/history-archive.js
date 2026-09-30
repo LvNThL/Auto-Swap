@@ -1,5 +1,6 @@
 const CSV_COLUMNS = [
-  ['Date', 'createdAt'],
+  ['Opened At', 'createdAt'],
+  ['Last Status Update', 'updatedAt'],
   ['Status', 'status'],
   ['Exchange ID', 'exchangeId'],
   ['Sent Amount', 'fromAmount'],
@@ -73,8 +74,8 @@ function csvCell(value) {
 function historyRecordsToCsv(records) {
   const header = CSV_COLUMNS.map(([label]) => csvCell(label)).join(',')
   const rows = records.map((record) => CSV_COLUMNS.map(([, field]) => {
-    const value = field === 'createdAt' && Number.isFinite(record.createdAt)
-      ? new Date(record.createdAt).toISOString()
+    const value = ['createdAt', 'updatedAt'].includes(field) && Number.isFinite(record[field])
+      ? new Date(record[field]).toISOString()
       : record[field]
     return csvCell(value)
   }).join(','))

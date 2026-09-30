@@ -190,6 +190,27 @@ function formatTunnelTimeRemaining(expiresAt, now) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
+const swapProgressSteps = ['Waiting for deposit', 'Confirming', 'Exchanging', 'Sending', 'Completed']
+const swapProgressByStatus = {
+  waiting: { step: 0, label: 'Deposit not detected yet', detail: "If you sent it, don't resend; allow time for network confirmation." },
+  confirming: { step: 1, label: 'Confirming', detail: 'ChangeNOW has detected the deposit. Network confirmations are in progress.' },
+  exchanging: { step: 2, label: 'Exchanging', detail: 'ChangeNOW is processing the exchange.' },
+  sending: { step: 3, label: 'Sending', detail: 'ChangeNOW is sending the exchanged asset to your destination.' },
+  finished: { step: 4, label: 'Completed', detail: 'ChangeNOW reports this exchange is complete.' },
+}
+
+function getSwapProgress(status, cancellationReason) {
+  const normalizedStatus = String(status || 'waiting').toLowerCase()
+  if (swapProgressByStatus[normalizedStatus]) return swapProgressByStatus[normalizedStatus]
+
+  const detail = normalizedStatus === 'refunded'
+    ? 'Check your wallet for the return transfer before creating another swap.'
+    : normalizedStatus === 'cancelled'
+      ? 'Closing tracking in AutoSwap does not cancel the ChangeNOW exchange or invalidate its deposit address.'
+      : 'Check the exchange status and your wallet activity before trying again.'
+  return { step: -1, label: formatSwapStatus(normalizedStatus, cancellationReason), detail }
+}
+
 const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
 const depositReceivedStatuses = new Set(['confirming', 'exchanging', 'sending', 'finished', 'failed', 'refunded'])
 const inProgressOrCompletedStatuses = new Set(['waiting', 'confirming', 'exchanging', 'sending', 'finished'])
@@ -257,7 +278,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
-  const [tunnelNotice, setTunnelNotice] = useState('')
   const [error, setError] = useState('')
   const [quote, setQuote] = useState(null)
   const [tunnel, setTunnel] = useState(null)
@@ -265,6 +285,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [swapHistory, setSwapHistory] = useState([])
   const [pendingSwaps, setPendingSwaps] = useState([])
   const [historyArchives, setHistoryArchives] = useState([])
+  const [historyArchivesLoading, setHistoryArchivesLoading] = useState(false)
   const [archiveError, setArchiveError] = useState('')
   const [archiveDownloadBusy, setArchiveDownloadBusy] = useState('')
   const [historyLoading, setHistoryLoading] = useState(true)
@@ -368,6 +389,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const estimatedRate = quote && selectedPreset
     ? formatEstimatedRate(selectedPreset.fromAmount, quote.estimatedAmount, selectedPreset.fromCurrency, selectedPreset.toCurrency)
     : null
+  const quoteExpired = Boolean(confirming && quote?.quoteExpiresAt && clockNow >= quote.quoteExpiresAt)
   const destinationAddressEntries = addressBookEntries.filter((entry) =>
     entry.purpose === 'destination' && entry.ticker === selectedToCurrency?.ticker && entry.network === selectedToCurrency?.network)
   const refundAddressEntries = addressBookEntries.filter((entry) =>
@@ -385,7 +407,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
   async function closeWaitingSwap(swap) {
     const confirmed = window.confirm(
-      `Cancel tracking for ${swap.fromAmount} ${swap.fromCurrency?.toUpperCase()}?\n\nOnly continue if you did not send funds. AutoSwap checks with ChangeNOW first, then closes this log locally. It does not cancel the ChangeNOW exchange or deactivate its deposit address.`,
+      `Close tracking for ${swap.fromAmount} ${swap.fromCurrency?.toUpperCase()}?\n\nOnly if you haven't sent funds. This closes tracking in AutoSwap only; it doesn't cancel the ChangeNOW exchange or deactivate its address.`,
     )
     if (!confirmed) return
 
@@ -408,10 +430,15 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   }
 
   async function loadHistoryArchives() {
-    const getArchives = httpsCallable(functions, 'getSwapHistoryArchives')
-    const { data } = await getArchives({})
-    setHistoryArchives(data.archives ?? [])
-    setArchiveError('')
+    setHistoryArchivesLoading(true)
+    try {
+      const getArchives = httpsCallable(functions, 'getSwapHistoryArchives')
+      const { data } = await getArchives({})
+      setHistoryArchives(data.archives ?? [])
+      setArchiveError('')
+    } finally {
+      setHistoryArchivesLoading(false)
+    }
   }
 
   async function downloadHistoryArchive(month) {
@@ -429,7 +456,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       link.remove()
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
     } catch {
-      setArchiveError('This monthly archive could not be downloaded. Please try again.')
+      setArchiveError("Couldn't download archive. Try again.")
     } finally {
       setArchiveDownloadBusy('')
     }
@@ -440,7 +467,23 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       await navigator.clipboard.writeText(value)
       setCopyToast({ message: `${label} copied`, target })
     } catch {
-      setCopyToast({ message: 'Clipboard access is unavailable', target: '' })
+      const textarea = document.createElement('textarea')
+      const previousFocus = document.activeElement
+      textarea.value = value
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.left = '-9999px'
+      document.body.append(textarea)
+      textarea.select()
+      let copied = false
+      try {
+        copied = document.execCommand('copy')
+      } catch {}
+      textarea.remove()
+      previousFocus?.focus?.()
+      setCopyToast(copied
+        ? { message: `${label} copied`, target }
+        : { message: `Couldn't copy ${label.toLowerCase()}. Select the text to copy it manually.`, target: '', error: true })
     }
   }
 
@@ -451,10 +494,10 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   }, [copyToast])
 
   useEffect(() => {
-    if (!openTunnelTimerKey) return undefined
+    if (!openTunnelTimerKey && !confirming) return undefined
     const interval = window.setInterval(() => setClockNow(Date.now()), 1000)
     return () => window.clearInterval(interval)
-  }, [openTunnelTimerKey])
+  }, [confirming, openTunnelTimerKey])
 
   useEffect(() => {
     let active = true
@@ -473,7 +516,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         }
         return data
       } catch {
-        if (active) setHistoryError("We couldn't load exchange activity just now. This doesn't mean your swap failed. Please refresh in a moment.")
+        if (active) setHistoryError("Couldn't load activity. Your swap may still be processing. Refresh to retry.")
         return null
       } finally {
         if (active) setHistoryLoading(false)
@@ -552,7 +595,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       if (active && data) pollHistory(data)
     })
     loadHistoryArchives().catch(() => {
-      if (active) setArchiveError('Monthly archives could not be loaded. Your current swap history is unaffected.')
+      if (active) setArchiveError("Couldn't load archives. Current history is unaffected.")
     })
     const interval = window.setInterval(pollHistory, 15000)
     return () => {
@@ -934,20 +977,20 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   async function requestQuote() {
     if (!selectedPreset) return
     if (currenciesLoading || !selectedPresetToCurrency) {
-      setError('AutoSwap is still checking the saved asset requirements. Wait for the currency list to finish loading before requesting a quote.')
+      setError('Assets are still loading. Try again shortly.')
       return
     }
     if (selectedPresetToCurrency.requiresExtraId && !swapDestinationExtraId.trim()) {
-      setError(`A current destination memo or tag is required for ${selectedPreset.toCurrency.toUpperCase()} on ${selectedPreset.toNetwork.toUpperCase()}. Enter it above before requesting a quote.`)
+      setError(`Enter the current ${selectedPreset.toCurrency.toUpperCase()} memo or tag for ${selectedPreset.toNetwork.toUpperCase()} to continue.`)
       return
     }
     if (selectedPresetRefundExtraIdRequired && !swapRefundExtraId.trim()) {
-      setError(`A current refund memo or tag is required for ${selectedPreset.fromCurrency.toUpperCase()} on ${selectedPreset.fromNetwork.toUpperCase()} because this preset includes a refund address.`)
+      setError(`Enter the current refund memo or tag for ${selectedPreset.fromCurrency.toUpperCase()} on ${selectedPreset.fromNetwork.toUpperCase()}.`)
       return
     }
     setBusy(true)
     setError('')
-    setNotice('Checking current pair availability and a live estimate with ChangeNOW…')
+    setNotice('Checking pair and live estimate…')
     setQuote(null)
 
     try {
@@ -964,11 +1007,12 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         refundExtraId: selectedPreset.refundAddress ? swapRefundExtraId.trim() : '',
         presetId: selectedPreset.id,
       })
+      setClockNow(Date.now())
       setQuote(result.data)
       setConfirming(true)
       setNotice('')
     } catch (quoteError) {
-      setError(`ChangeNOW could not provide a usable live quote, so no deposit address was created. Do not send funds. ${getErrorMessage(quoteError)}`)
+      setError(`No live quote; no deposit address was created. Don't send funds. ${getErrorMessage(quoteError)}`)
       setNotice('')
     } finally {
       setBusy(false)
@@ -978,7 +1022,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   async function confirmSwap() {
     if (!selectedPreset || !quote?.quoteId) return
     if (waitingTunnelCount >= MAX_WAITING_TUNNELS) {
-      setError('This account already has 3 tunnels waiting for a deposit. Wait for a deposit or close a waiting tunnel before opening another.')
+      setError('Three tunnels are waiting for deposits. Wait or close an unfunded tunnel before opening another.')
       return
     }
     if (Date.now() >= quote.quoteExpiresAt) {
@@ -993,7 +1037,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setConfirming(false)
     setTunnel(null)
     setTunnelPreset(null)
-    setTunnelNotice('')
 
     try {
       const created = await createTunnel(selectedPreset, quote.quoteId)
@@ -1004,7 +1047,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       setQuote(null)
       setSwapDestinationExtraId('')
       setSwapRefundExtraId('')
-      setHistoryError(created.trackingSaved ? '' : 'Automatic tracking for this exchange could not be saved. It may not appear in history automatically. Keep the exchange ID in its deposit details, if available, to check its status with ChangeNOW.')
+      setHistoryError(created.trackingSaved ? '' : "Tracking couldn't be saved. Keep the Exchange ID to check status with ChangeNOW.")
       if (created.trackingSaved && created.id) {
         setPendingSwaps((current) => [{
           id: created.id,
@@ -1022,14 +1065,12 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           estimatedAmount: quote.estimatedAmount,
           createdAt: tunnelAccessExpiresAt - TUNNEL_ACCESS_TTL_MS,
         }, ...current.filter((swap) => swap.exchangeId !== created.id)])
-        loadSwapHistory().catch(() => setHistoryError("We couldn't refresh tracking details for this exchange. Please refresh exchange activity shortly."))
+        loadSwapHistory().catch(() => setHistoryError("Couldn't refresh activity. Try again shortly."))
       }
 
-      const sourceWallet = getSourceWalletName(selectedPreset)
       setNotice('')
-      setTunnelNotice(`Send only ${selectedPreset.fromCurrency?.toUpperCase()} on ${selectedPreset.fromNetwork?.toUpperCase()} from ${sourceWallet} to this address. This deposit address is for this exchange only.`)
     } catch (swapError) {
-      setError(`ChangeNOW did not create a usable deposit tunnel. No deposit address is available; do not send funds. ${getErrorMessage(swapError)}`)
+      setError(`No deposit address was created. Don't send funds. ${getErrorMessage(swapError)}`)
       setNotice('')
       setQuote(null)
     } finally {
@@ -1071,7 +1112,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   setQuote(null)
                   setTunnel(null)
                   setTunnelPreset(null)
-                  setTunnelNotice('')
                   setNotice('')
                   setError('')
                   setHistoryError('')
@@ -1099,7 +1139,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
             {selectedPreset && !showNewPreset && <button className="button button-quiet delete-button" onClick={removePreset} type="button">Delete route</button>}
           </div>
 
-          {!isFirebaseConfigured && <div className="notice notice-warning">Firebase is not configured. Add the VITE_FIREBASE_* values before signing in or saving routes.</div>}
+          {!isFirebaseConfigured && <div className="notice notice-warning">Firebase isn't configured. Add VITE_FIREBASE_* settings to continue.</div>}
           {error && <div className="notice notice-error" role="alert">{error}</div>}
           {addressBookError && <div className="notice notice-error" role="alert">{addressBookError}</div>}
 
@@ -1177,14 +1217,14 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                 <div className="flow-destination field-wide">
                   <span>RECEIVING AT</span>
                   <strong>{formDestinationWalletName}</strong>
-                  <p>After the quote is confirmed, send the selected asset on its selected network from any compatible wallet to the ChangeNOW deposit address. The exchanged asset will be sent to your destination address.</p>
+                  <p>Send the selected asset and network to ChangeNOW. It sends the exchanged asset to this destination.</p>
                 </div>
                 <label>Amount to send ({form.fromCurrency.toUpperCase()})<input aria-describedby="minimum-send-note" name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
                 <p className="field-note field-wide" id="minimum-send-note" role="status">
                   {minimumStatus === 'loading' && 'Checking the minimum for this pair… '}
-                  {minimumStatus === 'ready' && `Minimum send for the selected pair: ${minimumAmount} ${form.fromCurrency.toUpperCase()}. `}
-                  {minimumStatus === 'error' && 'The current minimum is unavailable. ChangeNOW will check it when you request a quote. '}
-                  Enter the amount you plan to send to ChangeNOW. The estimated receive amount appears after you request a quote.
+                  {minimumStatus === 'ready' && `Minimum: ${minimumAmount} ${form.fromCurrency.toUpperCase()}. `}
+                  {minimumStatus === 'error' && 'Minimum unavailable; ChangeNOW will check when you request a quote. '}
+                  Enter the send amount. The estimate appears with your quote.
                 </p>
                 <label className="field-wide">Destination address<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder="Address on the selected receive network" required /></label>
                 {(selectedToCurrency?.requiresExtraId || selectedToCurrency?.supportsExtraId) && <label className="field-wide preset-memo-field">Destination memo or tag{selectedToCurrency.requiresExtraId ? ' (Required for each swap)' : ' (Optional)'}<input autoComplete="off" name="destinationExtraId" onChange={updateForm} placeholder={selectedToCurrency.requiresExtraId ? 'Enter the current destination memo or tag' : 'Enter an optional destination memo or tag'} value={form.destinationExtraId} /><small>{selectedToCurrency.requiresExtraId ? 'A value is required before requesting a quote.' : 'Only enter one if ChangeNOW or the receiving wallet provides it.'} This value applies to the swap you open now and will not be saved with the preset.</small></label>}
@@ -1206,7 +1246,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   <button className="button button-quiet" onClick={() => beginSaveAddress('refund')} type="button">Save refund address</button>
                   <button className="button button-quiet" onClick={() => setAddressBookDialog('manage-refund')} type="button">Manage address book</button>
                 </div>
-                <p className="field-note field-wide">Use a wallet that can send the selected asset on the selected network. Only pairs supported by ChangeNOW can be quoted; verify the live quote before creating a deposit tunnel.</p>
+                <p className="field-note field-wide">Use a wallet that supports this asset and network. Review the live quote before opening a tunnel.</p>
                 <div className="form-actions field-wide"><button className="button button-quiet" disabled={busy} onClick={cancelPresetForm} type="button">Cancel</button><button className="button button-primary" disabled={busy || currenciesLoading || !selectedFromCurrency?.canSell || !selectedToCurrency?.canBuy} type="submit">{busy ? 'Saving…' : editingPresetId ? 'Save changes' : 'Save preset'}</button></div>
               </form>
             </section>
@@ -1220,13 +1260,13 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
             <section className="empty-state">
               <p className="eyebrow">ROUTES UNAVAILABLE</p>
               <h2>Saved routes couldn’t load</h2>
-              <p>Check your connection, then try loading your routes again.</p>
+              <p>Check your connection and try again.</p>
               <button className="button button-primary" disabled={presetsLoading} onClick={retryPresetLoad} type="button">Try again</button>
             </section>
           )}
 
           {!presetsLoading && !presetsLoadError && !selectedPreset && !showNewPreset && (
-            <section className="empty-state"><div className="empty-glyph" aria-hidden="true">↗</div><p className="eyebrow">READY WHEN YOU ARE</p><h2>Create Your First Route</h2><p>Save your swap details and destination addresses for easy reuse.</p><button className="button button-primary" onClick={toggleNewPreset} type="button">Create a route <span aria-hidden="true">+</span></button></section>
+            <section className="empty-state"><div className="empty-glyph" aria-hidden="true">↗</div><p className="eyebrow">READY WHEN YOU ARE</p><h2>Create Your First Route</h2><p>Save a route to reuse its details.</p><button className="button button-primary" onClick={toggleNewPreset} type="button">Create a route <span aria-hidden="true">+</span></button></section>
           )}
 
           {selectedPreset && !showNewPreset && (
@@ -1251,18 +1291,18 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   </div>
                   <span className="panel-index">01 / ROUTE</span>
                 </div>
-                {selectedPresetToCurrency?.requiresExtraId && <div className="notice notice-warning preset-extra-id-warning" role="status">This preset requires a current destination memo or tag. Enter the value provided for this swap; it is not saved with the preset.</div>}
+                {selectedPresetToCurrency?.requiresExtraId && <div className="notice notice-warning preset-extra-id-warning" role="status">Enter the current destination memo or tag. It isn't saved with the preset.</div>}
                 {(selectedPresetToCurrency?.requiresExtraId || selectedPresetToCurrency?.supportsExtraId || (selectedPreset?.refundAddress && (selectedPresetFromCurrency?.requiresExtraId || selectedPresetFromCurrency?.supportsExtraId))) && <div className="preset-extra-id-fields">
                   {(selectedPresetToCurrency?.requiresExtraId || selectedPresetToCurrency?.supportsExtraId) && (
                     <label>Destination memo or tag{selectedPresetToCurrency.requiresExtraId ? ' (Required)' : ' (Optional)'}
                       <input autoComplete="off" onChange={(event) => { setSwapDestinationExtraId(event.target.value); setQuote(null); setConfirming(false); setError('') }} placeholder={selectedPresetToCurrency.requiresExtraId ? 'Enter the current required memo or tag' : 'Enter a memo or tag if required by this deposit'} required={selectedPresetToCurrency.requiresExtraId} value={swapDestinationExtraId} />
-                      <small>Use the current value for this swap. It will not be saved with the preset.</small>
+                      <small>Current value only; not saved with the preset.</small>
                     </label>
                   )}
                   {selectedPreset?.refundAddress && (selectedPresetFromCurrency?.requiresExtraId || selectedPresetFromCurrency?.supportsExtraId) && (
                     <label>Refund memo or tag{selectedPresetRefundExtraIdRequired ? ' (Required)' : ' (Optional)'}
                       <input autoComplete="off" onChange={(event) => { setSwapRefundExtraId(event.target.value); setQuote(null); setConfirming(false); setError('') }} placeholder={selectedPresetRefundExtraIdRequired ? 'Enter the current required refund memo or tag' : 'Enter a refund memo or tag if required'} required={selectedPresetRefundExtraIdRequired} value={swapRefundExtraId} />
-                      <small>Used only if ChangeNOW refunds this swap. It will not be saved with the preset.</small>
+                      <small>Used only for refunds; not saved with the preset.</small>
                     </label>
                   )}
                 </div>}
@@ -1282,7 +1322,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           {openTunnels.length > 0 && (
             <section className="panel tunnel-panel">
               <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Open Tunnels</h2></div><span className="live-badge">{openTunnels.length} {openTunnels.length === 1 ? 'ADDRESS' : 'ADDRESSES'} AVAILABLE</span></div>
-              {tunnelNotice && <div className="notice notice-success" role="status">{tunnelNotice}</div>}
               <div className="open-tunnel-list">
                 {openTunnels.map((openTunnel) => {
                   const route = `${openTunnel.fromCurrency?.toUpperCase()} (${openTunnel.fromNetwork?.toUpperCase()}) to ${openTunnel.toCurrency?.toUpperCase()} (${openTunnel.toNetwork?.toUpperCase()})`
@@ -1301,21 +1340,47 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                       <div className="open-tunnel-details">
                         {tunnelExpired ? (
                           <>
-                            <div className="notice notice-warning">The address timer ended. Do not send funds to this address. Close this waiting tunnel in Auto Swap.</div>
-                            {canCancelTunnel
-                              ? <button className="button button-quiet open-tunnel-cancel" disabled={cancellingExchangeId !== ''} onClick={() => closeWaitingSwap({ ...openTunnel, exchangeId })} title="Closes tracking in Auto Swap only; this does not cancel the ChangeNOW exchange." type="button">{cancellingExchangeId === exchangeId ? 'Checking…' : 'Cancel in Auto Swap'}</button>
-                              : <p className="field-note">Checking with ChangeNOW. The close action appears after a fresh status check confirms the tunnel is still waiting for a deposit.</p>}
+                            <div className="notice notice-warning">Address window ended. Don’t send here. If you already sent funds, don’t resend or close tracking.</div>
+                            {!canCancelTunnel && <p className="field-note">Checking status. Close is available only if ChangeNOW still shows Waiting.</p>}
                           </>
                         ) : (
                           <>
-                            <p className="field-note">Send only {openTunnel.fromCurrency?.toUpperCase()} on {openTunnel.fromNetwork?.toUpperCase()} from {getSourceWalletName(openTunnel)}. Sending another asset or network can permanently lose funds.</p>
-                            <div className="notice notice-warning single-use-warning">Use this address once for this exchange only. Never reuse it for another quote or swap.</div>
-                            <div className="deposit-address"><span>Deposit address</span><code>{openTunnel.payinAddress}</code><button aria-label={copyToast?.target === addressTarget ? 'Address copied to clipboard' : 'Copy address'} aria-live="polite" className={`button button-quiet ${copyToast?.target === addressTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinAddress, 'Address', addressTarget)} type="button">{copyToast?.target === addressTarget ? '✓ Copied' : 'Copy address'}</button></div>
-                            {openTunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{openTunnel.payinExtraId}</code><button aria-label={copyToast?.target === memoTarget ? 'Memo or tag copied to clipboard' : 'Copy memo or tag'} aria-live="polite" className={`button button-quiet ${copyToast?.target === memoTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinExtraId, 'Memo or tag', memoTarget)} type="button">{copyToast?.target === memoTarget ? '✓ Copied' : 'Copy memo or tag'}</button></div>}
+                            <div className="notice notice-warning single-use-warning" role="note">Send only {openTunnel.fromCurrency?.toUpperCase()} on {openTunnel.fromNetwork?.toUpperCase()}. This address is for this exchange only; sending another asset or network may permanently lose funds.</div>
+                            <div className="deposit-address"><span>Deposit address</span><div className="deposit-value-row"><code>{openTunnel.payinAddress}</code><button aria-label={copyToast?.target === addressTarget ? 'Address copied to clipboard' : 'Copy address'} aria-live="polite" className={`button button-quiet ${copyToast?.target === addressTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinAddress, 'Address', addressTarget)} type="button">Copy</button></div></div>
+                            {openTunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><div className="deposit-value-row"><code>{openTunnel.payinExtraId}</code><button aria-label={copyToast?.target === memoTarget ? 'Memo or tag copied to clipboard' : 'Copy memo or tag'} aria-live="polite" className={`button button-quiet ${copyToast?.target === memoTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinExtraId, 'Memo or tag', memoTarget)} type="button">Copy</button></div></div>}
                             {(openTunnel.transactionHash || openTunnel.payinHash) && <div className="transaction-hash"><span>Wallet transaction</span><code>{openTunnel.transactionHash ?? openTunnel.payinHash}</code></div>}
                           </>
                         )}
-                        {openTunnel.id && <p className="field-note">Exchange ID: {openTunnel.id}</p>}
+                        {(() => {
+                          const progress = getSwapProgress(openTunnel.status, openTunnel.cancellationReason)
+                          return (
+                            <section className={`swap-progress ${progress.step < 0 ? 'swap-progress-alert' : ''}`} aria-label="Swap status">
+                              <div className="swap-progress-current" role="status" aria-live="polite">
+                                <span className="swap-progress-led" aria-hidden="true" />
+                                <div><strong>{progress.label}</strong><p>{progress.detail}</p></div>
+                              </div>
+                              {progress.step >= 0 && (
+                                <ol className="swap-progress-steps" aria-label="Swap progress">
+                                  {swapProgressSteps.map((step, index) => {
+                                    const complete = index < progress.step || progress.step === swapProgressSteps.length - 1
+                                    const current = index === progress.step && !complete
+                                    return (
+                                      <li className={`${complete ? 'is-complete' : ''} ${current ? 'is-current' : ''}`} aria-current={current ? 'step' : undefined} key={step}>
+                                        <span>{complete ? '✓' : index + 1}</span><small>{step}</small>
+                                      </li>
+                                    )
+                                  })}
+                                </ol>
+                              )}
+                            </section>
+                          )
+                        })()}
+                        {(openTunnel.id || canCancelTunnel) && (
+                          <div className="tunnel-footer">
+                            {openTunnel.id && <p className="tunnel-exchange-id">Exchange ID: <code>{openTunnel.id}</code></p>}
+                            {canCancelTunnel && <button className="button button-quiet open-tunnel-cancel" disabled={cancellingExchangeId !== ''} onClick={() => closeWaitingSwap({ ...openTunnel, exchangeId })} title="Closes tracking in AutoSwap only; this does not cancel the ChangeNOW exchange." type="button">{cancellingExchangeId === exchangeId ? 'Checking…' : 'Close in AutoSwap'}</button>}
+                          </div>
+                        )}
                       </div>
                     </details>
                   )
@@ -1339,7 +1404,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               </label>
             </div>
             {historyError && !showNewPreset && <div className="notice notice-warning" role="status">{historyError}</div>}
-            {historyLoading ? <p className="history-empty">Loading exchange activity…</p> : filteredSwapHistory.length === 0 ? <p className="history-empty">{visibleSwapHistory.length === 0 ? 'Swaps appear here when a deposit tunnel is created. If the 7-minute address window ends before a deposit, close the tunnel in AutoSwap; it will show as “Closed in AutoSwap” or “Expired” if ChangeNOW expires it. Deposited swaps remain here through processing and completion.' : 'No swaps match this filter.'}</p> : (
+            {historyLoading ? <p className="history-empty">Loading activity…</p> : filteredSwapHistory.length === 0 ? <p className="history-empty">{visibleSwapHistory.length === 0 ? 'New swaps appear here. Close expired tunnels you did not fund.' : 'No swaps match this filter.'}</p> : (
               <>
                 <div className="history-list">
                   {recentSwapHistory.map((swap) => (
@@ -1362,12 +1427,12 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
             )}
             <div className="history-archives">
               <div className="history-archives-heading">
-                <div><strong>Monthly Tax Archives</strong><small>Completed executions are retained for download.</small></div>
-                <button className="button button-quiet" disabled={historyLoading} onClick={() => loadHistoryArchives().catch(() => setArchiveError('Monthly archives could not be loaded. Please try again.'))} type="button">Refresh</button>
+                <div><strong>Monthly Swap Archives</strong><small>Crypto-only CSVs; no fiat values or cost basis.</small></div>
+                <button className="button button-quiet" disabled={historyLoading || historyArchivesLoading} onClick={() => loadHistoryArchives().catch(() => setArchiveError("Couldn't load archives."))} type="button">{historyArchivesLoading ? 'Refreshing…' : 'Refresh'}</button>
               </div>
               {archiveError && <div className="notice notice-warning" role="status">{archiveError}</div>}
               {historyArchives.length === 0
-                ? !archiveError && <p className="history-empty">Monthly archives will appear here after the first archive run.</p>
+                ? !archiveError && <p className="history-empty">No archives yet.</p>
                 : <ul className="history-archive-list">{historyArchives.map((month) => (
                   <li className="history-archive-item" key={month}>
                     <span>{new Date(`${month}-01T00:00:00Z`).toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' })}</span>
@@ -1414,26 +1479,31 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           <section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
             <p className="eyebrow">FINAL REVIEW</p>
             <h2 id="confirm-title">Confirm This Route?</h2>
-            <p className="muted">Review the live estimate before creating a deposit tunnel. This quote expires at {new Date(quote.quoteExpiresAt).toLocaleTimeString()}.</p>
+            <p className="muted">Review the route and live estimate before creating a deposit tunnel.</p>
+            <div className={`quote-expiry ${quoteExpired ? 'quote-expiry-expired' : ''}`} role="timer" aria-label={quoteExpired ? 'Quote expired' : `Quote expires in ${formatTunnelTimeRemaining(quote.quoteExpiresAt, clockNow)}`}>
+              <span>Live quote</span><strong>{quoteExpired ? 'Expired' : `Expires in ${formatTunnelTimeRemaining(quote.quoteExpiresAt, clockNow)}`}</strong>
+              <small>Until {new Date(quote.quoteExpiresAt).toLocaleTimeString()}</small>
+            </div>
             <dl className="confirmation-list">
               <div><dt>Send</dt><dd>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} on {selectedPreset.fromNetwork?.toUpperCase()}</dd></div>
               <div><dt>Receive</dt><dd>{selectedPreset.toCurrency?.toUpperCase()} on {selectedPreset.toNetwork?.toUpperCase()}</dd></div>
               <div><dt>Estimated receive</dt><dd>{quote.estimatedAmount} {selectedPreset.toCurrency?.toUpperCase()}</dd></div>
               {estimatedRate && <div><dt>Estimated rate</dt><dd><code>{estimatedRate}</code><br />Based on this quote and send amount; not a fixed rate.</dd></div>}
               <div><dt>Minimum send</dt><dd>{quote.minimumAmount} {selectedPreset.fromCurrency?.toUpperCase()}</dd></div>
-              <div><dt>Destination</dt><dd>{getDestinationWalletName(selectedPreset)}<br /><code>{selectedPreset.destinationAddress}</code></dd></div>
+              <div><dt>Destination</dt><dd>{getDestinationWalletName(selectedPreset)} on {selectedPreset.toNetwork?.toUpperCase()}<br /><code>{selectedPreset.destinationAddress}</code></dd></div>
               {swapDestinationExtraId && <div><dt>Memo or tag</dt><dd><code>{swapDestinationExtraId}</code></dd></div>}
-              {selectedPreset.refundAddress && <div><dt>Refund address</dt><dd><code>{selectedPreset.refundAddress}</code></dd></div>}
+              {selectedPreset.refundAddress && <div><dt>Refund address</dt><dd>On {selectedPreset.fromNetwork?.toUpperCase()}<br /><code>{selectedPreset.refundAddress}</code></dd></div>}
               {swapRefundExtraId && <div><dt>Refund memo or tag</dt><dd><code>{swapRefundExtraId}</code></dd></div>}
             </dl>
             {quote.warningMessage && <p className="modal-warning">{quote.warningMessage}</p>}
             {waitingTunnelCount >= MAX_WAITING_TUNNELS && <p className="modal-warning">All 3 waiting-for-deposit slots are in use. Wait for a deposit or close a waiting tunnel before opening another.</p>}
-            <p className="modal-warning">This standard-flow estimate is indicative and may change. Confirming creates the exchange. Your wallet will ask for separate approval before sending funds.</p>
-            <div className="form-actions"><button className="button button-quiet" onClick={() => setConfirming(false)} type="button">Go back</button><button className="button button-primary" disabled={busy || waitingTunnelCount >= MAX_WAITING_TUNNELS} onClick={confirmSwap} type="button">{busy ? 'Creating tunnel…' : 'Confirm & create tunnel'}</button></div>
+            <p className="modal-warning">This estimate is indicative and may change. Confirming creates a ChangeNOW exchange and deposit address; it does not send funds. You must send the exact asset over the exact network shown in the deposit instructions.</p>
+            {quoteExpired && <p className="notice notice-warning" role="alert">This quote has expired. Go back and request a fresh quote before creating the tunnel.</p>}
+            <div className="form-actions"><button className="button button-quiet" onClick={() => setConfirming(false)} type="button">Go back</button><button className="button button-primary" disabled={busy || quoteExpired || waitingTunnelCount >= MAX_WAITING_TUNNELS} onClick={confirmSwap} type="button">{busy ? 'Creating tunnel…' : quoteExpired ? 'Quote expired' : 'Confirm & create tunnel'}</button></div>
           </section>
         </div>
       )}
-      {copyToast && <div className="copy-toast" role="status" aria-live="polite">{copyToast.message}</div>}
+      {copyToast && <div className={`copy-toast ${copyToast.error ? 'copy-toast-error' : ''}`} role="status" aria-live="polite">{copyToast.message}</div>}
     </div>
   )
 }

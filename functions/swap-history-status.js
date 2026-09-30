@@ -6,6 +6,7 @@ const DEPOSIT_RECEIVED_STATUSES = new Set([
   'failed',
   'refunded',
 ])
+const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
 
 function depositReceived(status) {
   return typeof status === 'string' && DEPOSIT_RECEIVED_STATUSES.has(status.toLowerCase())
@@ -22,6 +23,15 @@ function isWaitingForDeposit(status) {
 function isLocallyClosedSwap(record) {
   return String(record?.status ?? '').toLowerCase() === 'cancelled'
     && ['user-requested', 'access-window-ended'].includes(record?.cancellationReason)
+}
+
+function isArchivableSwapHistoryRecord(record) {
+  return terminalSwapStatuses.has(String(record?.status ?? '').toLowerCase())
+    && record?.providerLiveTunnel !== true
+}
+
+function shouldMonitorProviderStatus(status) {
+  return !terminalSwapStatuses.has(String(status ?? '').toLowerCase())
 }
 
 function timestampMillis(value) {
@@ -45,6 +55,9 @@ module.exports = {
   pendingHistoryStatus,
   isWaitingForDeposit,
   isLocallyClosedSwap,
+  isArchivableSwapHistoryRecord,
+  shouldMonitorProviderStatus,
+  terminalSwapStatuses,
   tunnelAccessExpiresAt,
   isTunnelAccessWindowOpen,
 }

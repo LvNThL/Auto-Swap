@@ -13,7 +13,7 @@ export default function InstallAppControl({ installPrompt, isInstalled, isIos, o
   async function installApp() {
     if (!installPrompt) {
       if (isIos) setShowGuide(true)
-      else setFeedback('This browser has not offered app installation. Try Chrome or Edge on Android.')
+      else setFeedback("Install isn't available here. Try Chrome or Edge on Android.")
       return
     }
 
@@ -22,7 +22,7 @@ export default function InstallAppControl({ installPrompt, isInstalled, isIos, o
       const choice = await installPrompt.userChoice
       if (choice.outcome === 'accepted') setFeedback('Installation started')
     } catch {
-      setFeedback('The install prompt could not be opened. Try again later.')
+      setFeedback("Couldn't open install prompt. Try again.")
     } finally {
       onPromptConsumed()
     }
@@ -41,7 +41,7 @@ export default function InstallAppControl({ installPrompt, isInstalled, isIos, o
           <section className="confirm-modal install-guide" aria-labelledby="install-guide-title" aria-modal="true" role="dialog">
             <p className="eyebrow">INSTALL AUTOSWAP</p>
             <h2 id="install-guide-title">Add to Home Screen</h2>
-            <p className="muted">On iPhone or iPad, Safari requires adding web apps from its Share menu:</p>
+            <p className="muted">In Safari, tap Share, then Add to Home Screen:</p>
             <ol>
               <li>Open this page in Safari.</li>
               <li>Tap the Share button.</li>

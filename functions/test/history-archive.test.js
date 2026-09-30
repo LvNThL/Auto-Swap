@@ -70,6 +70,7 @@ test('merges archive retries without duplicating executions', () => {
 test('creates spreadsheet-safe CSV with tax-relevant transaction fields', () => {
   const csv = historyRecordsToCsv([{
     createdAt: Date.UTC(2026, 0, 2),
+    updatedAt: Date.UTC(2026, 0, 3, 4, 5, 6),
     status: 'finished',
     exchangeId: '=IMPORTXML("unsafe")',
     fromAmount: '0.25',
@@ -83,8 +84,9 @@ test('creates spreadsheet-safe CSV with tax-relevant transaction fields', () => 
     cancellationReason: 'user-requested',
   }])
 
-  assert.match(csv, /^"Date","Status","Exchange ID"/)
+  assert.match(csv, /^"Opened At","Last Status Update","Status","Exchange ID"/)
   assert.match(csv, /"'=?IMPORTXML\(""unsafe""\)"/)
   assert.match(csv, /"2026-01-02T00:00:00\.000Z"/)
+  assert.match(csv, /"2026-01-03T04:05:06\.000Z"/)
   assert.match(csv, /"deposit-hash","payout-hash","user-requested"$/)
 })

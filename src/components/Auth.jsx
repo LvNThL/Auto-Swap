@@ -88,7 +88,7 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
       if (mode === 'register') {
         const credential = await createUserWithEmailAndPassword(auth, email.trim(), password)
         await sendEmailVerification(credential.user)
-        setMessage('Account created. Check your inbox for an email verification link.')
+        setMessage('Account created. Verify your email to continue.')
       } else {
         await signInWithEmailAndPassword(auth, email.trim(), password)
       }
@@ -100,7 +100,7 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
         'auth/invalid-email': 'Enter a valid email address.',
         'auth/too-many-requests': 'Too many attempts. Try again later.',
       }
-      setMessage(messages[error.code] ?? 'Authentication failed. Check your connection and try again.')
+      setMessage(messages[error.code] ?? 'Sign-in failed. Check your details and try again.')
     } finally {
       setBusy(false)
     }
@@ -110,9 +110,9 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
     setMessage('')
     try {
       await sendEmailVerification(verificationUser)
-      setMessage('Verification email sent. Check your inbox and spam folder.')
+      setMessage('Verification email sent. Check your inbox.')
     } catch {
-      setMessage('The verification email could not be sent. Try again later.')
+      setMessage("Couldn't send verification email. Try again.")
     }
   }
 
@@ -124,10 +124,10 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
         await verificationUser.getIdToken(true)
         window.location.reload()
       } else {
-        setMessage('Your email is not verified yet. Open the verification link in your inbox first.')
+        setMessage('Email not verified yet. Open the link in your inbox.')
       }
     } catch {
-      setMessage('Verification status could not be checked. Try again.')
+      setMessage("Couldn't check verification. Try again.")
     }
   }
 
@@ -139,7 +139,7 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
           <section className="auth-panel">
             <p className="eyebrow">VERIFY YOUR EMAIL</p>
             <h1>One More Step</h1>
-            <p className="muted">Open the verification link sent to {verificationUser.email}. Swap routes stay locked until your email is verified.</p>
+            <p className="muted">Verify {verificationUser.email} to use swap routes.</p>
             <p className="verification-spam-note">If it’s not in your inbox, check your spam or junk folder.</p>
             {message && <p className="form-message" role="status">{message}</p>}
             <div className="form-stack">
@@ -153,7 +153,7 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
             <section aria-labelledby="verification-reminder-title" aria-modal="true" className="confirm-modal verification-reminder" role="dialog">
               <p className="eyebrow">EMAIL VERIFICATION</p>
               <h2 id="verification-reminder-title">Check Your Spam Folder</h2>
-              <p className="muted">If the verification email isn’t in your inbox, check your spam or junk folder. You can resend it from this screen.</p>
+              <p className="muted">Check spam if the email is missing. Resend it from this screen.</p>
               <div className="form-actions"><button autoFocus className="button button-primary" onClick={() => setVerificationReminderOpen(false)} type="button">Got it</button></div>
             </section>
           </div>

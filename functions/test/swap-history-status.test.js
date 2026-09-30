@@ -5,6 +5,8 @@ const {
   pendingHistoryStatus,
   isWaitingForDeposit,
   isLocallyClosedSwap,
+  isArchivableSwapHistoryRecord,
+  shouldMonitorProviderStatus,
   tunnelAccessExpiresAt,
   isTunnelAccessWindowOpen,
 } = require('../swap-history-status')
@@ -49,4 +51,20 @@ test('uses the stored access deadline and falls back to tunnel-open time', () =>
   assert.equal(isTunnelAccessWindowOpen(record, 479_999, 420_000), true)
   assert.equal(isTunnelAccessWindowOpen(record, 480_000, 420_000), false)
   assert.equal(tunnelAccessExpiresAt({ createdAt: 60_000 }, 420_000), 480_000)
+})
+
+test('does not archive locally closed tunnels while the provider tunnel remains live', () => {
+  assert.equal(isArchivableSwapHistoryRecord({ status: 'cancelled', providerLiveTunnel: true }), false)
+  assert.equal(isArchivableSwapHistoryRecord({ status: 'cancelled', providerLiveTunnel: false }), true)
+  assert.equal(isArchivableSwapHistoryRecord({ status: 'finished', providerLiveTunnel: true }), false)
+  assert.equal(isArchivableSwapHistoryRecord({ status: 'waiting', providerLiveTunnel: false }), false)
+})
+
+test('keeps provider monitoring active through processing and stops at terminal statuses', () => {
+  for (const status of ['waiting', 'confirming', 'exchanging', 'sending', 'unknown']) {
+    assert.equal(shouldMonitorProviderStatus(status), true, status)
+  }
+  for (const status of ['finished', 'failed', 'refunded', 'expired', 'cancelled']) {
+    assert.equal(shouldMonitorProviderStatus(status), false, status)
+  }
 })

@@ -11,6 +11,9 @@ const {
   pendingHistoryStatus,
   isWaitingForDeposit,
   isLocallyClosedSwap,
+  isArchivableSwapHistoryRecord,
+  shouldMonitorProviderStatus,
+  terminalSwapStatuses,
   isTunnelAccessWindowOpen,
 } = require('./swap-history-status')
 const {
@@ -116,6 +119,7 @@ async function savePendingSwapToHistory({ uid, pendingDoc, exchangeId, transacti
       status,
       ...(cancellationReason ? { cancellationReason } : {}),
       providerLiveTunnel: isLocalClose,
+      ...(isLocalClose ? { lastProviderCheckAt: now } : {}),
       createdAt: pendingRecord.tunnelOpenedAt ?? pendingRecord.createdAt ?? now,
       updatedAt: now,
     })
@@ -302,8 +306,6 @@ async function deleteUserRecord(uid, collectionName, maximum, countField, record
     })
   })
 }
-
-const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
 
 async function consumeQuote(uid, quoteId, exchange, presetId) {
   const quoteRef = database.collection('users').doc(uid).collection('swapQuotes').doc(quoteId)
@@ -762,7 +764,7 @@ exports.archiveMonthlySwapHistory = onSchedule(
       const groups = new Map()
       for (const document of snapshot.docs) {
         const record = document.data()
-        if (!terminalSwapStatuses.has(String(record.status ?? '').toLowerCase())) continue
+        if (!isArchivableSwapHistoryRecord(record)) continue
         const userId = document.ref.parent.parent?.id
         const createdAt = typeof record.createdAt?.toMillis === 'function' ? record.createdAt.toMillis() : null
         const month = historyArchiveMonth(createdAt)
@@ -789,7 +791,7 @@ exports.archiveMonthlySwapHistory = onSchedule(
       if (snapshot.size < 100) break
     }
 
-    console.info('Archived completed swap history records:', archivedCount)
+    console.info('Archived terminal swap history records:', archivedCount)
   },
 )
 
@@ -836,6 +838,34 @@ exports.downloadSwapHistoryArchive = onCall(
   },
 )
 
+async function updateLocallyClosedSwapStatus(uid, historyDoc, result, transactionDetails) {
+  const status = result.status.toLowerCase()
+  const checkedAt = Timestamp.fromMillis(Date.now())
+
+  if (isWaitingForDeposit(status)) {
+    await historyDoc.ref.update({ lastProviderCheckAt: checkedAt })
+    return serializeSwapHistory(await historyDoc.ref.get())
+  }
+
+  if (!depositReceived(status) && !terminalSwapStatuses.has(status)) {
+    await historyDoc.ref.update({ ...transactionDetails, updatedAt: checkedAt, lastProviderCheckAt: checkedAt })
+    return serializeSwapHistory(await historyDoc.ref.get())
+  }
+
+  await historyDoc.ref.update({
+    status: status === 'expired' ? pendingHistoryStatus(result.status) : result.status,
+    cancellationReason: status === 'expired' ? 'provider-expired' : null,
+    providerLiveTunnel: shouldMonitorProviderStatus(status),
+    lastProviderCheckAt: checkedAt,
+    ...(result.toAmount == null ? {} : { toAmount: String(result.toAmount) }),
+    ...transactionDetails,
+    updatedAt: checkedAt,
+  })
+  await releaseTunnelSlot(uid, historyDoc.id)
+
+  return serializeSwapHistory(await historyDoc.ref.get())
+}
+
 exports.refreshSwapStatus = onCall(
   { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
@@ -875,25 +905,7 @@ exports.refreshSwapStatus = onCall(
     const status = result.status.toLowerCase()
 
     if (historyDoc && locallyClosed) {
-      if (isWaitingForDeposit(status)) return serializeSwapHistory(historyDoc)
-
-      if (!depositReceived(status) && !terminalSwapStatuses.has(status)) {
-        await historyDoc.ref.update({ ...transactionDetails, updatedAt: Timestamp.fromMillis(Date.now()) })
-        return serializeSwapHistory(await historyDoc.ref.get())
-      }
-
-      await historyDoc.ref.update({
-        status: status === 'expired' ? pendingHistoryStatus(result.status) : result.status,
-        cancellationReason: status === 'expired' ? 'provider-expired' : null,
-        providerLiveTunnel: false,
-        ...(result.toAmount == null ? {} : { toAmount: String(result.toAmount) }),
-        ...transactionDetails,
-        updatedAt: Timestamp.fromMillis(Date.now()),
-      })
-      await releaseTunnelSlot(request.auth.uid, historyDoc.id)
-
-      const updatedSnapshot = await historyDoc.ref.get()
-      return serializeSwapHistory(updatedSnapshot)
+      return updateLocallyClosedSwapStatus(request.auth.uid, historyDoc, result, transactionDetails)
     }
 
     if (pendingDoc) {
@@ -947,6 +959,9 @@ exports.refreshSwapStatus = onCall(
 
     await historyDoc.ref.update({
       status: result.status,
+      ...(savedRecord.providerLiveTunnel === true
+        ? { providerLiveTunnel: shouldMonitorProviderStatus(status) }
+        : {}),
       ...(result.toAmount == null ? {} : { toAmount: String(result.toAmount) }),
       ...transactionDetails,
       updatedAt: Timestamp.fromMillis(Date.now()),
@@ -954,6 +969,54 @@ exports.refreshSwapStatus = onCall(
 
     const updatedSnapshot = await historyDoc.ref.get()
     return serializeSwapHistory(updatedSnapshot)
+  },
+)
+
+exports.reconcileProviderLiveTunnels = onSchedule(
+  { schedule: '*/15 * * * *', timeZone: 'UTC', region: 'us-central1', maxInstances: 1, timeoutSeconds: 540 },
+  async () => {
+    const snapshot = await database.collectionGroup('swapHistory')
+      .where('providerLiveTunnel', '==', true)
+      .get()
+    const getLastCheckedAt = (document) => {
+      const timestamp = document.get('lastProviderCheckAt') ?? document.get('updatedAt') ?? document.get('createdAt')
+      return typeof timestamp?.toMillis === 'function' ? timestamp.toMillis() : Number(timestamp) || 0
+    }
+    const records = snapshot.docs
+      .sort((left, right) => getLastCheckedAt(left) - getLastCheckedAt(right))
+      .slice(0, 100)
+    let failedChecks = 0
+
+    for (let offset = 0; offset < records.length; offset += 5) {
+      await Promise.all(records.slice(offset, offset + 5).map(async (historyDoc) => {
+        const uid = historyDoc.ref.parent.parent?.id
+        const exchangeId = historyDoc.get('exchangeId')
+        try {
+          if (!uid || typeof exchangeId !== 'string' || !exchangeId) {
+            throw new Error('Live tunnel history is missing its owner or exchange ID.')
+          }
+          await enforceRequestCooldown(uid, `status-${exchangeId}`, 5000)
+          const result = await callChangeNow(`/by-id?id=${encodeURIComponent(exchangeId)}`)
+          if (typeof result.status !== 'string' || !result.status.trim()) {
+            throw new Error('ChangeNOW did not return a transaction status.')
+          }
+          const transactionDetails = extractTransactionHistoryDetails(result, {
+            fromNetwork: historyDoc.get('fromNetwork'),
+            toNetwork: historyDoc.get('toNetwork'),
+          })
+          await updateLocallyClosedSwapStatus(uid, historyDoc, result, transactionDetails)
+        } catch (error) {
+          failedChecks += 1
+          await historyDoc.ref.update({ lastProviderCheckAt: Timestamp.fromMillis(Date.now()) }).catch(() => {})
+          console.warn('Could not reconcile provider-live swap:', JSON.stringify({
+            exchangeId: typeof exchangeId === 'string' ? exchangeId : null,
+            code: error.code ?? null,
+          }))
+        }
+      }))
+    }
+
+    console.info('Reconciled provider-live swaps:', records.length, 'of', snapshot.size, 'with', failedChecks, 'failed checks.')
   },
 )
 
