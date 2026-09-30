@@ -17,6 +17,7 @@
   --paper: #fbfcf9;
   --page-bg: #f1f3ee;
   --topbar-bg: rgba(251,252,249,.72);
+  --status-bar-color: #fbfcf9;
   --surface-soft: rgba(251,252,249,.76);
   --surface-hover: rgba(255,255,255,.55);
   --nav-bg: #fbfcf9;
@@ -323,6 +324,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   --paper: #202a24;
   --page-bg: #151c18;
   --topbar-bg: rgba(27,36,30,.88);
+  --status-bar-color: #1b241e;
   --nav-bg: #1b241e;
   --nav-ink: #e5ece5;
   --nav-muted: #a2afa5;
@@ -494,6 +496,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   --paper: #f8fffb;
   --page-bg: #dcf9e9;
   --topbar-bg: #10231a;
+  --status-bar-color: #10231a;
   --nav-bg: #172d22;
   --nav-ink: #f1fff5;
   --nav-muted: #b6d7c3;
@@ -522,6 +525,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   --paper: #f8fcff;
   --page-bg: #e2f1fa;
   --topbar-bg: #123246;
+  --status-bar-color: #123246;
   --nav-bg: #17415c;
   --nav-ink: #eff9ff;
   --nav-muted: #b9d6e4;
@@ -550,6 +554,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   --paper: #fafcf6;
   --page-bg: #eaf0de;
   --topbar-bg: #293a2c;
+  --status-bar-color: #293a2c;
   --nav-bg: #354a35;
   --nav-ink: #f4f8ed;
   --nav-muted: #c2d0b7;
@@ -578,6 +583,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   --paper: #f9fbff;
   --page-bg: #e5ecf6;
   --topbar-bg: #223148;
+  --status-bar-color: #223148;
   --nav-bg: #2d405a;
   --nav-ink: #f3f7ff;
   --nav-muted: #c1cede;
@@ -606,6 +612,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   --paper: #fcfaff;
   --page-bg: #eee8f8;
   --topbar-bg: #342946;
+  --status-bar-color: #342946;
   --nav-bg: #433459;
   --nav-ink: #fbf7ff;
   --nav-muted: #d1c4e4;

@@ -88,9 +88,16 @@ export default function App() {
   useEffect(() => {
     const systemPreference = window.matchMedia('(prefers-color-scheme: dark)')
     const applyTheme = () => {
-      document.documentElement.dataset.theme = themePreference === 'system'
+      const resolvedTheme = themePreference === 'system'
         ? systemPreference.matches ? 'dark' : 'light'
         : themePreference
+      document.documentElement.dataset.theme = resolvedTheme
+      const statusBarColor = getComputedStyle(document.documentElement).getPropertyValue('--status-bar-color').trim()
+      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', statusBarColor)
+      document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')?.setAttribute(
+        'content',
+        resolvedTheme === 'light' ? 'default' : 'black-translucent',
+      )
     }
 
     applyTheme()

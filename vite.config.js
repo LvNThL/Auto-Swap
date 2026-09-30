@@ -16,7 +16,7 @@ export default defineConfig({
         name: 'AutoSwap Route Desk',
         short_name: 'AutoSwap',
         description: 'Prepare and review cross-exchange crypto swap routes.',
-        theme_color: '#f1f3ee',
+        theme_color: '#fbfcf9',
         background_color: '#f1f3ee',
         display_override: ['edge-to-edge', 'standalone'],
         display: 'standalone',
