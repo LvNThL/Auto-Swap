@@ -154,6 +154,13 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .notice-error { border-color: var(--error-line); background: var(--error-bg); color: var(--error-ink); }
 .notice-success { border-color: var(--success-line); background: var(--success-bg); color: var(--success-ink); }
 .tunnel-panel { margin-top: 18px; padding: 23px 25px; }
+.open-tunnel-list { display: grid; }
+.open-tunnel-item { min-width: 0; padding: 18px 0 2px; border-top: 1px solid var(--line); }
+.open-tunnel-item + .open-tunnel-item { margin-top: 19px; }
+.open-tunnel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.open-tunnel-heading > div { min-width: 0; display: grid; gap: 6px; }
+.open-tunnel-heading strong { overflow-wrap: anywhere; font-size: 12px; }
+.open-tunnel-heading small { color: var(--muted); font-size: 9px; }
 .single-use-warning { margin-top: 17px; }
 .live-badge { padding: 5px 8px; border-radius: 4px; color: var(--finished-ink); background: var(--finished-bg); font-family: 'IBM Plex Mono', monospace; font-size: 8px; white-space: nowrap; }
 .field-note { margin: 17px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }

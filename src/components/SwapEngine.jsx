@@ -221,31 +221,28 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [clockNow, setClockNow] = useState(() => Date.now())
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
-  const persistedTunnel = pendingSwaps
-    .filter((swap) => swap.presetId === selectedId && swap.payinAddress)
-    .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))[0]
-  const localTunnelSelected = tunnel?.presetId === selectedId
-  const tunnelCandidate = localTunnelSelected
-    ? tunnel
-    : persistedTunnel
-      ? {
-        id: persistedTunnel.exchangeId,
-        payinAddress: persistedTunnel.payinAddress,
-        payinExtraId: persistedTunnel.payinExtraId,
-        presetId: persistedTunnel.presetId,
-        accessExpiresAt: persistedTunnel.accessExpiresAt ?? (persistedTunnel.createdAt + TUNNEL_ACCESS_TTL_MS),
-      }
-      : null
-  const activeTunnel = tunnelCandidate && clockNow < tunnelCandidate.accessExpiresAt ? tunnelCandidate : null
-  const activeTunnelPreset = localTunnelSelected
-    ? tunnelPreset
-    : persistedTunnel
-      ? {
-        sourceName: persistedTunnel.sourceName,
-        fromCurrency: persistedTunnel.fromCurrency,
-        fromNetwork: persistedTunnel.fromNetwork,
-      }
-      : null
+  const openTunnels = pendingSwaps
+    .map((swap) => ({
+      ...swap,
+      id: swap.exchangeId ?? swap.id,
+      accessExpiresAt: swap.accessExpiresAt ?? (swap.createdAt ? swap.createdAt + TUNNEL_ACCESS_TTL_MS : 0),
+    }))
+    .filter((swap) => swap.payinAddress && clockNow < swap.accessExpiresAt)
+    .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
+  const openTunnelIds = new Set(openTunnels.map((swap) => swap.id))
+  if (tunnel?.payinAddress && clockNow < tunnel.accessExpiresAt && !openTunnelIds.has(tunnel.id)) {
+    openTunnels.unshift({
+      ...tunnel,
+      sourceName: tunnelPreset?.sourceName,
+      fromCurrency: tunnelPreset?.fromCurrency,
+      fromNetwork: tunnelPreset?.fromNetwork,
+      fromAmount: tunnelPreset?.fromAmount,
+      toCurrency: tunnelPreset?.toCurrency,
+      toNetwork: tunnelPreset?.toNetwork,
+      createdAt: tunnel.accessExpiresAt - TUNNEL_ACCESS_TTL_MS,
+    })
+  }
+  const openTunnelTimerKey = openTunnels.map((swap) => swap.id).join('|')
   const visibleSwapHistory = [
     ...swapHistory.filter((swap) => {
       const status = String(swap.status || '').toLowerCase()
@@ -358,10 +355,10 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   }, [copyToast])
 
   useEffect(() => {
-    if (!activeTunnel) return undefined
+    if (openTunnels.length === 0) return undefined
     const interval = window.setInterval(() => setClockNow(Date.now()), 1000)
     return () => window.clearInterval(interval)
-  }, [activeTunnel?.id])
+  }, [openTunnelTimerKey])
 
   useEffect(() => {
     let active = true
@@ -1028,17 +1025,29 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
           {notice && !showNewPreset && <div className="notice notice-success" role="status">{notice}</div>}
 
-          {activeTunnel && !showNewPreset && (
+          {openTunnels.length > 0 && (
             <section className="panel tunnel-panel">
-              <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Swap Tunnel Ready</h2></div><span className="live-badge">ADDRESS SHOWN FOR {formatTunnelTimeRemaining(activeTunnel.accessExpiresAt, clockNow)}</span></div>
-              <p className="field-note">This address stays in the active tunnel card through the 7-minute countdown. When it ends, AutoSwap checks ChangeNOW; a Cancel option appears only after a fresh check still reports Waiting. A detected deposit removes the card sooner. The timer does not deactivate the ChangeNOW address.</p>
+              <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Open Tunnels</h2></div><span className="live-badge">{openTunnels.length} {openTunnels.length === 1 ? 'ADDRESS' : 'ADDRESSES'} AVAILABLE</span></div>
+              <p className="field-note">Each address is shown for its own seven-minute window, across all routes. When a window ends, the address is removed from this panel; the timer does not deactivate it with ChangeNOW.</p>
               {tunnelNotice && <div className="notice notice-success" role="status">{tunnelNotice}</div>}
-              <p className="field-note">Send only {(activeTunnelPreset ?? selectedPreset)?.fromCurrency?.toUpperCase()} on {(activeTunnelPreset ?? selectedPreset)?.fromNetwork?.toUpperCase()} from {getSourceWalletName(activeTunnelPreset ?? selectedPreset)}. Sending another asset or network can permanently lose funds.</p>
-              <div className="notice notice-warning single-use-warning">Use this deposit address once for this exchange only. Never reuse it for another quote or swap. Send the exact asset on the exact network shown above.</div>
-              <div className="deposit-address"><span>Deposit address</span><code>{activeTunnel.payinAddress}</code><button aria-label={copyToast?.target === 'address' ? 'Address copied to clipboard' : 'Copy address'} aria-live="polite" className={`button button-quiet ${copyToast?.target === 'address' ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(activeTunnel.payinAddress, 'Address', 'address')} type="button">{copyToast?.target === 'address' ? '✓ Copied' : 'Copy address'}</button></div>
-              {activeTunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{activeTunnel.payinExtraId}</code><button aria-label={copyToast?.target === 'memo' ? 'Memo or tag copied to clipboard' : 'Copy memo or tag'} aria-live="polite" className={`button button-quiet ${copyToast?.target === 'memo' ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(activeTunnel.payinExtraId, 'Memo or tag', 'memo')} type="button">{copyToast?.target === 'memo' ? '✓ Copied' : 'Copy memo or tag'}</button></div>}
-              {activeTunnel.transactionHash && <div className="transaction-hash"><span>Wallet transaction</span><code>{activeTunnel.transactionHash}</code></div>}
-              {activeTunnel.id && <p className="field-note">Exchange ID: {activeTunnel.id}</p>}
+              <div className="open-tunnel-list">
+                {openTunnels.map((openTunnel) => {
+                  const route = `${openTunnel.fromCurrency?.toUpperCase()} (${openTunnel.fromNetwork?.toUpperCase()}) to ${openTunnel.toCurrency?.toUpperCase()} (${openTunnel.toNetwork?.toUpperCase()})`
+                  const addressTarget = `address-${openTunnel.id}`
+                  const memoTarget = `memo-${openTunnel.id}`
+                  return (
+                    <article className="open-tunnel-item" key={openTunnel.id ?? openTunnel.payinAddress}>
+                      <div className="open-tunnel-heading"><div><strong>{route}</strong><small>{getSourceWalletName(openTunnel)}{openTunnel.fromAmount ? ` · ${openTunnel.fromAmount} ${openTunnel.fromCurrency?.toUpperCase()}` : ''}</small></div><span className="live-badge">{formatTunnelTimeRemaining(openTunnel.accessExpiresAt, clockNow)}</span></div>
+                      <p className="field-note">Send only {openTunnel.fromCurrency?.toUpperCase()} on {openTunnel.fromNetwork?.toUpperCase()} from {getSourceWalletName(openTunnel)}. Sending another asset or network can permanently lose funds.</p>
+                      <div className="notice notice-warning single-use-warning">Use this address once for this exchange only. Never reuse it for another quote or swap.</div>
+                      <div className="deposit-address"><span>Deposit address</span><code>{openTunnel.payinAddress}</code><button aria-label={copyToast?.target === addressTarget ? 'Address copied to clipboard' : 'Copy address'} aria-live="polite" className={`button button-quiet ${copyToast?.target === addressTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinAddress, 'Address', addressTarget)} type="button">{copyToast?.target === addressTarget ? '✓ Copied' : 'Copy address'}</button></div>
+                      {openTunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{openTunnel.payinExtraId}</code><button aria-label={copyToast?.target === memoTarget ? 'Memo or tag copied to clipboard' : 'Copy memo or tag'} aria-live="polite" className={`button button-quiet ${copyToast?.target === memoTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinExtraId, 'Memo or tag', memoTarget)} type="button">{copyToast?.target === memoTarget ? '✓ Copied' : 'Copy memo or tag'}</button></div>}
+                      {(openTunnel.transactionHash || openTunnel.payinHash) && <div className="transaction-hash"><span>Wallet transaction</span><code>{openTunnel.transactionHash ?? openTunnel.payinHash}</code></div>}
+                      {openTunnel.id && <p className="field-note">Exchange ID: {openTunnel.id}</p>}
+                    </article>
+                  )
+                })}
+              </div>
             </section>
           )}
 

@@ -23,6 +23,12 @@ const {
 } = require('./history-archive')
 const { extractTransactionHistoryDetails } = require('./transaction-history-details')
 const {
+  MAX_OPEN_TUNNELS_PER_USER,
+  collectActiveTunnelIds,
+  reserveTunnelId,
+  isConfirmedCreateFailure,
+} = require('./tunnel-capacity')
+const {
   MAX_ADDRESS_BOOK_ENTRIES_PER_USER,
   MAX_DAILY_SAVED_RECORD_WRITES,
   MAX_PRESETS_PER_USER,
@@ -89,8 +95,13 @@ function serializeSwapHistory(snapshot) {
 
 async function savePendingSwapToHistory({ uid, pendingDoc, exchangeId, transactionDetails, status, providerToAmount, cancellationReason }) {
   const historyRef = swapHistoryCollection(uid).doc(pendingDoc.id)
+  const capacityRef = database.collection('users').doc(uid).collection('_privateMeta').doc('tunnelCapacity')
+  const isLocalClose = cancellationReason === 'user-requested' || cancellationReason === 'access-window-ended'
   await database.runTransaction(async (transaction) => {
-    const currentPending = await transaction.get(pendingDoc.ref)
+    const [currentPending, capacitySnapshot] = await Promise.all([
+      transaction.get(pendingDoc.ref),
+      transaction.get(capacityRef),
+    ])
     if (!currentPending.exists || currentPending.get('trackingStatus') !== 'pending') return
     const pendingRecord = currentPending.data()
     const now = Timestamp.fromMillis(Date.now())
@@ -105,16 +116,34 @@ async function savePendingSwapToHistory({ uid, pendingDoc, exchangeId, transacti
       ...transactionDetails,
       status,
       ...(cancellationReason ? { cancellationReason } : {}),
+      providerLiveTunnel: isLocalClose,
       createdAt: pendingRecord.tunnelOpenedAt ?? pendingRecord.createdAt ?? now,
       updatedAt: now,
     })
     transaction.delete(pendingDoc.ref)
+    if (!isLocalClose) {
+      transaction.set(capacityRef, {
+        activeTunnelIds: (capacitySnapshot.data()?.activeTunnelIds ?? []).filter((id) => id !== pendingDoc.id),
+        updatedAt: now,
+      }, { merge: true })
+    }
   })
 
   const historySnapshot = await historyRef.get()
   return historySnapshot.exists
     ? { ...serializeSwapHistory(historySnapshot), historyCreated: true }
     : { exchangeId, status, pending: true }
+}
+
+async function releaseTunnelSlot(uid, quoteId) {
+  const capacityRef = database.collection('users').doc(uid).collection('_privateMeta').doc('tunnelCapacity')
+  await database.runTransaction(async (transaction) => {
+    const capacitySnapshot = await transaction.get(capacityRef)
+    transaction.set(capacityRef, {
+      activeTunnelIds: (capacitySnapshot.data()?.activeTunnelIds ?? []).filter((id) => id !== quoteId),
+      updatedAt: Timestamp.fromMillis(Date.now()),
+    }, { merge: true })
+  })
 }
 
 function getUserRecordUsageRef(uid) {
@@ -283,12 +312,19 @@ async function consumeQuote(uid, quoteId, exchange, presetId) {
   const quoteRef = database.collection('users').doc(uid).collection('swapQuotes').doc(quoteId)
   const presetRef = database.collection('users').doc(uid).collection('presets').doc(presetId)
   const rateLimitRef = database.collection('_swapRateLimits').doc(`${uid}-create`)
+  const userRef = database.collection('users').doc(uid)
+  const capacityRef = userRef.collection('_privateMeta').doc('tunnelCapacity')
+  const pendingQuery = userRef.collection('swapQuotes').where('trackingStatus', '==', 'pending')
+  const closedQuery = userRef.collection('swapHistory').where('cancellationReason', 'in', ['user-requested', 'access-window-ended'])
 
   await database.runTransaction(async (transaction) => {
-    const [quoteSnapshot, presetSnapshot, rateLimitSnapshot] = await Promise.all([
+    const [quoteSnapshot, presetSnapshot, rateLimitSnapshot, capacitySnapshot, pendingSnapshot, closedSnapshot] = await Promise.all([
       transaction.get(quoteRef),
       transaction.get(presetRef),
       transaction.get(rateLimitRef),
+      transaction.get(capacityRef),
+      transaction.get(pendingQuery),
+      transaction.get(closedQuery),
     ])
 
     if (!quoteSnapshot.exists) {
@@ -318,8 +354,22 @@ async function consumeQuote(uid, quoteId, exchange, presetId) {
       throw new HttpsError('resource-exhausted', 'Wait a few seconds before creating another tunnel.')
     }
 
+    const activeTunnelIds = collectActiveTunnelIds(
+      capacitySnapshot.data()?.activeTunnelIds ?? [],
+      pendingSnapshot.docs.map((document) => ({ id: document.id, ...document.data() })),
+      closedSnapshot.docs.map((document) => ({ id: document.id, ...document.data() })),
+    )
+    const reservedTunnelIds = reserveTunnelId(activeTunnelIds, quoteId)
+    if (!reservedTunnelIds) {
+      throw new HttpsError('resource-exhausted', 'This account already has 3 provider-live tunnels. Wait for a deposit or provider-confirmed expiry before opening another.')
+    }
+
     transaction.update(quoteRef, { consumedAt: Timestamp.fromMillis(now) })
     transaction.set(rateLimitRef, { lastRequestAt: Timestamp.fromMillis(now) })
+    transaction.set(capacityRef, {
+      activeTunnelIds: reservedTunnelIds,
+      updatedAt: Timestamp.fromMillis(now),
+    }, { merge: true })
   })
 }
 
@@ -548,28 +598,33 @@ exports.createSwapTunnel = onCall(
     const quoteId = requiredString(request.data?.quoteId, 'quoteId', 128)
     const presetId = requiredRecordId(request.data?.presetId, 'presetId')
 
-    await consumeQuote(request.auth.uid, quoteId, { ...exchange, toAddress }, presetId)
-    const result = await callChangeNow('', {
-      method: 'POST',
-      body: {
-        fromCurrency: exchange.fromCurrency,
-        fromNetwork: exchange.fromNetwork,
-        toCurrency: exchange.toCurrency,
-        toNetwork: exchange.toNetwork,
-        fromAmount: exchange.fromAmount,
-        address: toAddress,
-        ...(exchange.toExtraId ? { extraId: exchange.toExtraId } : {}),
-        ...(exchange.refundAddress ? { refundAddress: exchange.refundAddress } : {}),
-        ...(exchange.refundExtraId ? { refundExtraId: exchange.refundExtraId } : {}),
-        flow: 'standard',
-        type: 'direct',
-      },
-    })
+    const uid = request.auth.uid
+    await consumeQuote(uid, quoteId, { ...exchange, toAddress }, presetId)
+    let result
+    try {
+      result = await callChangeNow('', {
+        method: 'POST',
+        body: {
+          fromCurrency: exchange.fromCurrency,
+          fromNetwork: exchange.fromNetwork,
+          toCurrency: exchange.toCurrency,
+          toNetwork: exchange.toNetwork,
+          fromAmount: exchange.fromAmount,
+          address: toAddress,
+          ...(exchange.toExtraId ? { extraId: exchange.toExtraId } : {}),
+          ...(exchange.refundAddress ? { refundAddress: exchange.refundAddress } : {}),
+          ...(exchange.refundExtraId ? { refundExtraId: exchange.refundExtraId } : {}),
+          flow: 'standard',
+          type: 'direct',
+        },
+      })
+    } catch (providerError) {
+      if (isConfirmedCreateFailure(providerError)) await releaseTunnelSlot(uid, quoteId)
+      throw providerError
+    }
 
     const payinAddress = result.payinAddress ?? result.depositAddress
-    if (typeof payinAddress !== 'string' || !payinAddress.trim()) {
-      throw new HttpsError('unavailable', 'ChangeNOW did not return a deposit address.')
-    }
+    const hasPayinAddress = typeof payinAddress === 'string' && Boolean(payinAddress.trim())
 
     const exchangeId = result.id ?? result.exchangeId ?? null
     const transactionDetails = extractTransactionHistoryDetails(result, {
@@ -581,11 +636,12 @@ exports.createSwapTunnel = onCall(
     let trackingSaved = false
     if (typeof exchangeId === 'string') {
       try {
-        await database.collection('users').doc(request.auth.uid).collection('swapQuotes').doc(quoteId).update({
+        await database.collection('users').doc(uid).collection('swapQuotes').doc(quoteId).update({
           exchangeId,
           status: typeof result.status === 'string' ? result.status : 'waiting',
           trackingStatus: 'pending',
-          payinAddress,
+          providerLiveTunnel: true,
+          ...(hasPayinAddress ? { payinAddress } : {}),
           payinExtraId: result.payinExtraId ?? null,
           ...transactionDetails,
           tunnelOpenedAt: Timestamp.fromMillis(tunnelOpenedAt),
@@ -597,6 +653,10 @@ exports.createSwapTunnel = onCall(
       } catch (trackingError) {
         console.error('Could not save pending swap tracking:', trackingError.message)
       }
+    }
+
+    if (!hasPayinAddress) {
+      throw new HttpsError('unavailable', 'ChangeNOW did not return a deposit address.')
     }
 
     return {
@@ -819,13 +879,20 @@ exports.refreshSwapStatus = onCall(
     if (historyDoc && locallyClosed) {
       if (isWaitingForDeposit(status)) return serializeSwapHistory(historyDoc)
 
+      if (!depositReceived(status) && !terminalSwapStatuses.has(status)) {
+        await historyDoc.ref.update({ ...transactionDetails, updatedAt: Timestamp.fromMillis(Date.now()) })
+        return serializeSwapHistory(await historyDoc.ref.get())
+      }
+
       await historyDoc.ref.update({
         status: status === 'expired' ? pendingHistoryStatus(result.status) : result.status,
         cancellationReason: status === 'expired' ? 'provider-expired' : null,
+        providerLiveTunnel: false,
         ...(result.toAmount == null ? {} : { toAmount: String(result.toAmount) }),
         ...transactionDetails,
         updatedAt: Timestamp.fromMillis(Date.now()),
       })
+      await releaseTunnelSlot(request.auth.uid, historyDoc.id)
 
       const updatedSnapshot = await historyDoc.ref.get()
       return serializeSwapHistory(updatedSnapshot)
@@ -847,7 +914,8 @@ exports.refreshSwapStatus = onCall(
 
       if (status === 'expired') {
         if (accessWindowOpen) {
-          await pendingDoc.ref.update({ ...transactionDetails, status: result.status, updatedAt: Timestamp.fromMillis(Date.now()) })
+          await pendingDoc.ref.update({ ...transactionDetails, status: result.status, providerLiveTunnel: false, updatedAt: Timestamp.fromMillis(Date.now()) })
+          await releaseTunnelSlot(request.auth.uid, pendingDoc.id)
           return { id: pendingDoc.id, exchangeId, status: result.status, ...transactionDetails, pending: true }
         }
 
@@ -859,6 +927,18 @@ exports.refreshSwapStatus = onCall(
           status: pendingHistoryStatus(result.status),
           providerToAmount: result.toAmount,
           cancellationReason: 'provider-expired',
+        })
+      }
+
+      if (terminalSwapStatuses.has(status)) {
+        return savePendingSwapToHistory({
+          uid: request.auth.uid,
+          pendingDoc,
+          exchangeId,
+          transactionDetails,
+          status: result.status,
+          providerToAmount: result.toAmount,
+          cancellationReason: 'provider-terminal',
         })
       }
 
