@@ -12,8 +12,8 @@ export default function AccountTools({
   isInstalled,
   isIos,
   onInstallPromptConsumed,
-  loginPage = false,
-  onLogin,
+  activePage = 'swap',
+  onNavigate,
   className = '',
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -60,7 +60,13 @@ export default function AccountTools({
             </svg>
           </button>
           {menuOpen && (
-            <div className="settings-menu-panel" id="account-settings-panel" aria-label="Settings and account">
+            <nav className="settings-menu-panel" id="account-settings-panel" aria-label="Application menu">
+              <div className="settings-nav-links">
+                <a aria-current={activePage === 'swap' ? 'page' : undefined} href="#/swap" onClick={() => { setMenuOpen(false); onNavigate?.('swap') }}>{user?.emailVerified ? 'Swap' : 'Sign in'}</a>
+                {!user && <a aria-current={activePage === 'signup' ? 'page' : undefined} href="#/signup" onClick={() => { setMenuOpen(false); onNavigate?.('signup') }}>Create account</a>}
+                <a aria-current={activePage === 'faq' ? 'page' : undefined} href="#/faq" onClick={() => { setMenuOpen(false); onNavigate?.('faq') }}>FAQ</a>
+                {user?.emailVerified && <a aria-current={activePage === 'account' ? 'page' : undefined} href="#/account" onClick={() => { setMenuOpen(false); onNavigate?.('account') }}>Account</a>}
+              </div>
               <div className="settings-theme-row">
                 <span>Theme</span>
                 <ThemeSelector className="settings-theme" onChange={(theme) => { onThemeChange(theme); setMenuOpen(false) }} value={themePreference} />
@@ -71,13 +77,7 @@ export default function AccountTools({
                   <button className="button button-quiet settings-sign-out" onClick={() => { setMenuOpen(false); signOut(auth) }} type="button">Sign out</button>
                 </div>
               )}
-              {!user && loginPage && (
-                <div className="settings-account-row">
-                  <span className="settings-account-email">Already have an account?</span>
-                  <button className="button button-quiet settings-sign-out" onClick={() => { setMenuOpen(false); onLogin?.() }} type="button">Log in</button>
-                </div>
-              )}
-            </div>
+            </nav>
           )}
         </div>
         <InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onPromptConsumed={onInstallPromptConsumed} />

@@ -170,7 +170,7 @@ function SwapHistoryItem({ swap }) {
   )
 }
 
-export default function SwapEngine({ user, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed }) {
+export default function SwapEngine({ user, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed, activePage, onNavigate }) {
   const [presets, setPresets] = useState([])
   const [currencies, setCurrencies] = useState([])
   const [currenciesLoading, setCurrenciesLoading] = useState(true)
@@ -840,11 +840,11 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="app-brand" href="./" aria-label="AutoSwap Route Desk home">
+        <a className="app-brand" href="#/swap" aria-label="AutoSwap Route Desk home" onClick={() => onNavigate?.('swap')}>
           <BrandMark />
           <span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span>
         </a>
-        <AccountTools installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onInstallPromptConsumed={onInstallPromptConsumed} onThemeChange={onThemeChange} themePreference={themePreference} user={user} />
+        <AccountTools activePage={activePage} installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onInstallPromptConsumed={onInstallPromptConsumed} onNavigate={onNavigate} onThemeChange={onThemeChange} themePreference={themePreference} user={user} />
       </header>
 
       <main className="workspace">

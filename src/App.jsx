@@ -1,8 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
 import Auth from './components/Auth.jsx'
-import BrandMark from './components/BrandMark.jsx'
-import InstallAppControl from './components/InstallAppControl.jsx'
+import HelpPages from './components/HelpPages.jsx'
 import ThemeSelector from './components/ThemeSelector.jsx'
 import { auth, isFirebaseConfigured } from './firebase.js'
 
@@ -23,12 +22,37 @@ function isIosDevice() {
     (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1)
 }
 
+function pageFromHash() {
+  const page = window.location.hash.replace(/^#\/?/, '')
+  return ['faq', 'account', 'signup'].includes(page) ? page : 'swap'
+}
+
 export default function App() {
   const [user, setUser] = useState(null)
   const [authReady, setAuthReady] = useState(false)
   const [themePreference, setThemePreference] = useState(getSavedTheme)
   const [installPrompt, setInstallPrompt] = useState(null)
   const [isInstalled, setIsInstalled] = useState(false)
+  const [activePage, setActivePage] = useState(pageFromHash)
+
+  function navigateTo(page) {
+    const nextHash = page === 'swap' ? '#/swap' : `#/${page}`
+    if (window.location.hash === nextHash) setActivePage(page)
+    else window.location.hash = nextHash
+  }
+
+  useEffect(() => {
+    function syncPage() {
+      setActivePage(pageFromHash())
+    }
+    window.addEventListener('hashchange', syncPage)
+    return () => window.removeEventListener('hashchange', syncPage)
+  }, [])
+
+  useEffect(() => {
+    const pageTitle = activePage === 'faq' ? 'FAQ' : activePage === 'account' ? 'Account' : 'Swap'
+    document.title = `${pageTitle} | AutoSwap Route Desk`
+  }, [activePage])
 
   useEffect(() => {
     const standalone = window.matchMedia('(display-mode: standalone)')
@@ -77,12 +101,26 @@ export default function App() {
   }, [])
 
   if (!isFirebaseConfigured) {
-    return <main className="auth-shell"><div className="auth-toolbar"><InstallAppControl installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIosDevice()} onPromptConsumed={() => setInstallPrompt(null)} /><ThemeSelector onChange={setThemePreference} value={themePreference} /></div><div className="auth-brand"><BrandMark /><span className="brand-copy"><strong>AutoSwap</strong><small>Route Desk</small></span></div><section className="auth-panel"><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Firebase</h1><p className="muted">Set the VITE_FIREBASE_* values in your deployment environment to enable authentication and private route storage.</p></section></main>
+    return <main className="auth-shell"><div className="auth-toolbar"><ThemeSelector onChange={setThemePreference} value={themePreference} /></div><section className="auth-panel"><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Firebase</h1><p className="muted">Set the VITE_FIREBASE_* values in your deployment environment to enable authentication and private route storage.</p></section></main>
   }
 
   if (!authReady) return <main className="loading-screen">Loading secure workspace…</main>
-  if (user && !user.emailVerified) return <Auth installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIosDevice()} onInstallPromptConsumed={() => setInstallPrompt(null)} onThemeChange={setThemePreference} themePreference={themePreference} verificationUser={user} />
+  const sharedPageProps = {
+    activePage,
+    installPrompt,
+    isInstalled,
+    isIos: isIosDevice(),
+    onInstallPromptConsumed: () => setInstallPrompt(null),
+    onNavigate: navigateTo,
+    onThemeChange: setThemePreference,
+    themePreference,
+    user,
+  }
+
+  if (activePage === 'faq') return <HelpPages {...sharedPageProps} page="faq" />
+  if (user && user.emailVerified && activePage === 'account') return <HelpPages {...sharedPageProps} page="account" />
+  if (user && !user.emailVerified) return <Auth {...sharedPageProps} verificationUser={user} />
   return user
-    ? <Suspense fallback={<main className="loading-screen">Loading secure workspace…</main>}><SwapEngine installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIosDevice()} key={user.uid} onInstallPromptConsumed={() => setInstallPrompt(null)} onThemeChange={setThemePreference} themePreference={themePreference} user={user} /></Suspense>
-    : <Auth installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIosDevice()} onInstallPromptConsumed={() => setInstallPrompt(null)} onThemeChange={setThemePreference} themePreference={themePreference} />
+    ? <Suspense fallback={<main className="loading-screen">Loading secure workspace…</main>}><SwapEngine {...sharedPageProps} key={user.uid} /></Suspense>
+    : <Auth {...sharedPageProps} initialMode={activePage === 'signup' ? 'register' : 'login'} />
 }

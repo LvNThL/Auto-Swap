@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import BrandMark from './BrandMark.jsx'
 import AccountTools from './AccountTools.jsx'
 import {
@@ -11,7 +11,7 @@ import {
 } from 'firebase/auth'
 import { auth } from '../firebase.js'
 
-function AuthHeader({ user, loginPage, installPrompt, isInstalled, isIos, onInstallPromptConsumed, onThemeChange, themePreference, onLogin }) {
+function AuthHeader({ user, installPrompt, isInstalled, isIos, onInstallPromptConsumed, onThemeChange, themePreference, activePage, onNavigate }) {
   return (
     <header className="topbar">
       <a className="app-brand" href="./" aria-label="AutoSwap Route Desk home">
@@ -22,9 +22,9 @@ function AuthHeader({ user, loginPage, installPrompt, isInstalled, isIos, onInst
         installPrompt={installPrompt}
         isInstalled={isInstalled}
         isIos={isIos}
-        loginPage={loginPage}
+        activePage={activePage}
         onInstallPromptConsumed={onInstallPromptConsumed}
-        onLogin={onLogin}
+        onNavigate={onNavigate}
         onThemeChange={onThemeChange}
         themePreference={themePreference}
         user={user}
@@ -33,13 +33,31 @@ function AuthHeader({ user, loginPage, installPrompt, isInstalled, isIos, onInst
   )
 }
 
-export default function Auth({ verificationUser, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed }) {
-  const [mode, setMode] = useState('login')
+export default function Auth({ verificationUser, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed, activePage, onNavigate, initialMode = 'login' }) {
+  const [mode, setMode] = useState(initialMode)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [rememberMe, setRememberMe] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [verificationReminderOpen, setVerificationReminderOpen] = useState(false)
+
+  useEffect(() => {
+    setMode(initialMode)
+  }, [initialMode])
+
+  useEffect(() => {
+    if (!verificationUser) return
+    const reminderKey = `autoswap-verification-reminder-${verificationUser.uid}`
+    try {
+      if (window.sessionStorage.getItem(reminderKey) !== 'shown') {
+        window.sessionStorage.setItem(reminderKey, 'shown')
+        setVerificationReminderOpen(true)
+      }
+    } catch {
+      setVerificationReminderOpen(true)
+    }
+  }, [verificationUser?.uid])
 
   async function submit(event) {
     event.preventDefault()
@@ -94,20 +112,16 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
     }
   }
 
-  function showLoginForm() {
-    setMode('login')
-    setMessage('')
-  }
-
   if (verificationUser) {
     return (
       <main className="auth-shell">
-        <AuthHeader installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onInstallPromptConsumed={onInstallPromptConsumed} onThemeChange={onThemeChange} themePreference={themePreference} user={verificationUser} />
+        <AuthHeader activePage={activePage} installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onInstallPromptConsumed={onInstallPromptConsumed} onNavigate={onNavigate} onThemeChange={onThemeChange} themePreference={themePreference} user={verificationUser} />
         <div className="auth-content">
           <section className="auth-panel">
             <p className="eyebrow">VERIFY YOUR EMAIL</p>
             <h1>One More Step</h1>
             <p className="muted">Open the verification link sent to {verificationUser.email}. Swap routes stay locked until your email is verified.</p>
+            <p className="verification-spam-note">If it’s not in your inbox, check your spam or junk folder.</p>
             {message && <p className="form-message" role="status">{message}</p>}
             <div className="form-stack">
               <button className="button button-primary" onClick={checkVerification} type="button">I’ve verified my email</button>
@@ -115,13 +129,23 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
             </div>
           </section>
         </div>
+        {verificationReminderOpen && (
+          <div className="modal-backdrop verification-reminder-backdrop" role="presentation">
+            <section aria-labelledby="verification-reminder-title" aria-modal="true" className="confirm-modal verification-reminder" role="dialog">
+              <p className="eyebrow">EMAIL VERIFICATION</p>
+              <h2 id="verification-reminder-title">Check Your Spam Folder</h2>
+              <p className="muted">If the verification email isn’t in your inbox, check your spam or junk folder. You can resend it from this screen.</p>
+              <div className="form-actions"><button autoFocus className="button button-primary" onClick={() => setVerificationReminderOpen(false)} type="button">Got it</button></div>
+            </section>
+          </div>
+        )}
       </main>
     )
   }
 
   return (
     <main className="auth-shell">
-      <AuthHeader installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} loginPage onInstallPromptConsumed={onInstallPromptConsumed} onLogin={showLoginForm} onThemeChange={onThemeChange} themePreference={themePreference} />
+      <AuthHeader activePage={activePage} installPrompt={installPrompt} isInstalled={isInstalled} isIos={isIos} onInstallPromptConsumed={onInstallPromptConsumed} onNavigate={onNavigate} onThemeChange={onThemeChange} themePreference={themePreference} />
       <div className="auth-content">
         <section className="auth-panel">
           <p className="eyebrow">PRIVATE WORKSPACE</p>

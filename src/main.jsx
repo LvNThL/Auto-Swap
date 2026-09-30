@@ -1,13 +1,15 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { registerSW } from 'virtual:pwa-register'
 import App from './App.jsx'
+import PwaUpdatePrompt from './components/PwaUpdatePrompt.jsx'
+import './pwa-registration.js'
 import './index.css'
-
-registerSW({ immediate: true })
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    <>
+      <App />
+      <PwaUpdatePrompt />
+    </>
   </React.StrictMode>,
 )
