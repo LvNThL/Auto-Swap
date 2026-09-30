@@ -167,6 +167,7 @@ function formatTunnelTimeRemaining(expiresAt, now) {
 
 const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
 const depositReceivedStatuses = new Set(['confirming', 'exchanging', 'sending', 'finished', 'failed', 'refunded'])
+const inProgressOrCompletedStatuses = new Set(['waiting', 'confirming', 'exchanging', 'sending', 'finished'])
 const MAX_WAITING_TUNNELS = 3
 const autoSwapClosureReasons = new Set(['user-requested', 'access-window-ended'])
 
@@ -266,8 +267,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       || String(swap.status || 'waiting').toLowerCase() === 'waiting'
     ))
     .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
-  const openTunnelIds = new Set(openTunnels.map((swap) => swap.id))
-  if (tunnel?.payinAddress && (clockNow < tunnel.accessExpiresAt || String(tunnel.status || 'waiting').toLowerCase() === 'waiting') && !openTunnelIds.has(tunnel.id)) {
+  if (tunnel?.payinAddress && (clockNow < tunnel.accessExpiresAt || String(tunnel.status || 'waiting').toLowerCase() === 'waiting') && !openTunnels.some((swap) => swap.id === tunnel.id)) {
     openTunnels.unshift({
       ...tunnel,
       fromCurrency: tunnelPreset?.fromCurrency,
@@ -278,28 +278,39 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       createdAt: tunnel.accessExpiresAt - TUNNEL_ACCESS_TTL_MS,
     })
   }
+  const openTunnelIds = new Set(openTunnels.map((swap) => swap.id).filter(Boolean))
   const openTunnelTimerKey = openTunnels
     .filter((swap) => clockNow < swap.accessExpiresAt)
     .map((swap) => swap.id)
     .join('|')
+  const pendingHistorySwaps = pendingSwaps.map((swap) => ({
+    ...swap,
+    id: swap.id ?? swap.exchangeId,
+    toAmount: swap.estimatedAmount ?? null,
+    status: swap.status || 'waiting',
+    pending: true,
+  }))
+  const pendingHistoryIds = new Set(pendingHistorySwaps.flatMap((swap) => [swap.id, swap.exchangeId]).filter(Boolean))
+  const locallyOpenHistorySwaps = openTunnels
+    .filter((swap) => !pendingHistoryIds.has(swap.id) && !pendingHistoryIds.has(swap.exchangeId))
+    .map((swap) => ({
+      ...swap,
+      toAmount: swap.estimatedAmount ?? null,
+      status: swap.status || 'waiting',
+      pending: true,
+    }))
   const visibleSwapHistory = [
     ...swapHistory.filter((swap) => {
       const status = String(swap.status || '').toLowerCase()
       return depositReceivedStatuses.has(status) || terminalSwapStatuses.has(status)
     }),
-    ...pendingSwaps.map((swap) => ({
-      ...swap,
-      id: swap.id ?? swap.exchangeId,
-      toAmount: swap.estimatedAmount ?? null,
-      status: swap.status || 'waiting',
-      pending: true,
-    })),
+    ...pendingHistorySwaps,
+    ...locallyOpenHistorySwaps,
   ].sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
   const filteredSwapHistory = visibleSwapHistory.filter((swap) => {
+    if ((swap.id && openTunnelIds.has(swap.id)) || (swap.exchangeId && openTunnelIds.has(swap.exchangeId))) return true
     const status = String(swap.status || '').toLowerCase()
-    if (historyFilter === 'waiting') return status === 'waiting'
-    if (historyFilter === 'confirmed') return ['confirming', 'exchanging', 'sending'].includes(status)
-    if (historyFilter === 'completed') return status === 'finished'
+    if (historyFilter === 'in-progress-completed') return inProgressOrCompletedStatuses.has(status)
     if (historyFilter === 'cancelled') return status === 'cancelled' && swap.cancellationReason !== 'provider-expired'
     if (historyFilter === 'expired') return status === 'expired' || swap.cancellationReason === 'provider-expired'
     if (historyFilter === 'failed') return status === 'failed' || status === 'refunded'
@@ -1180,9 +1191,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                 <span>Show</span>
                 <select id="swap-history-filter" value={historyFilter} onChange={(event) => setHistoryFilter(event.target.value)}>
                   <option value="all">All swaps</option>
-                  <option value="waiting">Waiting for deposit</option>
-                  <option value="confirmed">Confirmed / processing</option>
-                  <option value="completed">Completed</option>
+                  <option value="in-progress-completed">In progress &amp; completed</option>
                   <option value="cancelled">Cancelled</option>
                   <option value="expired">Expired</option>
                   <option value="failed">Failed / refunded</option>
