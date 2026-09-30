@@ -239,6 +239,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [archiveDownloadBusy, setArchiveDownloadBusy] = useState('')
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
+  const [historyFilter, setHistoryFilter] = useState('all')
   const [cancellingExchangeId, setCancellingExchangeId] = useState('')
   const [statusCheckByExchange, setStatusCheckByExchange] = useState({})
   const [copyToast, setCopyToast] = useState(null)
@@ -294,8 +295,18 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       pending: true,
     })),
   ].sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
-  const recentSwapHistory = visibleSwapHistory.slice(0, 7)
-  const olderSwapHistory = visibleSwapHistory.slice(7)
+  const filteredSwapHistory = visibleSwapHistory.filter((swap) => {
+    const status = String(swap.status || '').toLowerCase()
+    if (historyFilter === 'waiting') return status === 'waiting'
+    if (historyFilter === 'confirmed') return ['confirming', 'exchanging', 'sending'].includes(status)
+    if (historyFilter === 'completed') return status === 'finished'
+    if (historyFilter === 'cancelled') return status === 'cancelled' && swap.cancellationReason !== 'provider-expired'
+    if (historyFilter === 'expired') return status === 'expired' || swap.cancellationReason === 'provider-expired'
+    if (historyFilter === 'failed') return status === 'failed' || status === 'refunded'
+    return true
+  })
+  const recentSwapHistory = filteredSwapHistory.slice(0, 7)
+  const olderSwapHistory = filteredSwapHistory.slice(7)
   const fromCurrencies = currencies.filter((currency) => currency.canSell)
   const toCurrencies = currencies.filter((currency) => currency.canBuy)
   const fromSearchLower = fromSearch.trim().toLowerCase()
@@ -1163,9 +1174,23 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           )}
 
           <section className="panel history-panel" aria-labelledby="swap-history-title">
-            <div className="panel-heading"><div><p className="eyebrow">EXCHANGE ACTIVITY</p><h2 id="swap-history-title">Swap History</h2></div></div>
+            <div className="panel-heading">
+              <div><p className="eyebrow">EXCHANGE ACTIVITY</p><h2 id="swap-history-title">Swap History</h2></div>
+              <label className="history-filter" htmlFor="swap-history-filter">
+                <span>Show</span>
+                <select id="swap-history-filter" value={historyFilter} onChange={(event) => setHistoryFilter(event.target.value)}>
+                  <option value="all">All swaps</option>
+                  <option value="waiting">Waiting for deposit</option>
+                  <option value="confirmed">Confirmed / processing</option>
+                  <option value="completed">Completed</option>
+                  <option value="cancelled">Cancelled</option>
+                  <option value="expired">Expired</option>
+                  <option value="failed">Failed / refunded</option>
+                </select>
+              </label>
+            </div>
             {historyError && !showNewPreset && <div className="notice notice-warning" role="status">{historyError}</div>}
-            {historyLoading ? <p className="history-empty">Loading exchange activity…</p> : visibleSwapHistory.length === 0 ? <p className="history-empty">Swaps appear here when a deposit tunnel is created. If the 7-minute address window ends before a deposit, close the tunnel in AutoSwap; it will show as “Closed in AutoSwap” or “Expired” if ChangeNOW expires it. Deposited swaps remain here through processing and completion.</p> : (
+            {historyLoading ? <p className="history-empty">Loading exchange activity…</p> : filteredSwapHistory.length === 0 ? <p className="history-empty">{visibleSwapHistory.length === 0 ? 'Swaps appear here when a deposit tunnel is created. If the 7-minute address window ends before a deposit, close the tunnel in AutoSwap; it will show as “Closed in AutoSwap” or “Expired” if ChangeNOW expires it. Deposited swaps remain here through processing and completion.' : 'No swaps match this filter.'}</p> : (
               <>
                 <div className="history-list">
                   {recentSwapHistory.map((swap) => (

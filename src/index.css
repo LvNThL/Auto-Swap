@@ -188,6 +188,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .transaction-hash { display: grid; gap: 7px; margin-top: 15px; }
 .history-panel { margin-top: 20px; padding: 23px 25px; }
 .history-panel > .notice { margin-top: 18px; }
+.history-filter { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 9px; font-weight: 600; }
+.history-filter select { width: 154px; max-width: 48vw; height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--input-bg); color: var(--ink); font-size: 10px; font-weight: 400; }
 .history-list { display: grid; margin-top: 17px; }
 .history-item { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid var(--line); }
 .history-main { min-width: 0; display: grid; gap: 6px; }
