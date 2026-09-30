@@ -145,16 +145,9 @@ function isLocallyClosedSwap(swap) {
     && autoSwapClosureReasons.has(swap.cancellationReason)
 }
 
-function SwapHistoryItem({ swap, onCancel, cancellingExchangeId, statusCheck }) {
+function SwapHistoryItem({ swap }) {
   const status = String(swap.status || 'unknown').toLowerCase()
   const isTerminal = terminalSwapStatuses.has(status)
-  const accessExpiresAt = swap.accessExpiresAt ?? (swap.createdAt ? swap.createdAt + TUNNEL_ACCESS_TTL_MS : null)
-  const canCancel = swap.pending
-    && status === 'waiting'
-    && Number.isFinite(accessExpiresAt)
-    && Date.now() >= accessExpiresAt
-    && statusCheck?.status === 'waiting'
-    && statusCheck.requestStartedAt >= accessExpiresAt
 
   return (
     <article className="history-item">
@@ -172,11 +165,6 @@ function SwapHistoryItem({ swap, onCancel, cancellingExchangeId, statusCheck }) 
       </div>
       <div className="history-status-controls">
         <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status, swap.cancellationReason)}</span>
-        {canCancel && (
-          <button className="button button-quiet" disabled={cancellingExchangeId !== ''} onClick={() => onCancel(swap)} title="Closes tracking in AutoSwap only; this does not cancel the ChangeNOW exchange." type="button">
-            {cancellingExchangeId === swap.exchangeId ? 'Checking…' : 'Cancel'}
-          </button>
-        )}
       </div>
     </article>
   )
@@ -229,10 +217,13 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       id: swap.exchangeId ?? swap.id,
       accessExpiresAt: swap.accessExpiresAt ?? (swap.createdAt ? swap.createdAt + TUNNEL_ACCESS_TTL_MS : 0),
     }))
-    .filter((swap) => swap.payinAddress && clockNow < swap.accessExpiresAt)
+    .filter((swap) => swap.payinAddress && (
+      clockNow < swap.accessExpiresAt
+      || String(swap.status || 'waiting').toLowerCase() === 'waiting'
+    ))
     .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
   const openTunnelIds = new Set(openTunnels.map((swap) => swap.id))
-  if (tunnel?.payinAddress && clockNow < tunnel.accessExpiresAt && !openTunnelIds.has(tunnel.id)) {
+  if (tunnel?.payinAddress && (clockNow < tunnel.accessExpiresAt || String(tunnel.status || 'waiting').toLowerCase() === 'waiting') && !openTunnelIds.has(tunnel.id)) {
     openTunnels.unshift({
       ...tunnel,
       sourceName: tunnelPreset?.sourceName,
@@ -244,7 +235,10 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       createdAt: tunnel.accessExpiresAt - TUNNEL_ACCESS_TTL_MS,
     })
   }
-  const openTunnelTimerKey = openTunnels.map((swap) => swap.id).join('|')
+  const openTunnelTimerKey = openTunnels
+    .filter((swap) => clockNow < swap.accessExpiresAt)
+    .map((swap) => swap.id)
+    .join('|')
   const visibleSwapHistory = [
     ...swapHistory.filter((swap) => {
       const status = String(swap.status || '').toLowerCase()
@@ -354,7 +348,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   }, [copyToast])
 
   useEffect(() => {
-    if (openTunnels.length === 0) return undefined
+    if (!openTunnelTimerKey) return undefined
     const interval = window.setInterval(() => setClockNow(Date.now()), 1000)
     return () => window.clearInterval(interval)
   }, [openTunnelTimerKey])
@@ -1037,15 +1031,33 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   const route = `${openTunnel.fromCurrency?.toUpperCase()} (${openTunnel.fromNetwork?.toUpperCase()}) to ${openTunnel.toCurrency?.toUpperCase()} (${openTunnel.toNetwork?.toUpperCase()})`
                   const addressTarget = `address-${openTunnel.id}`
                   const memoTarget = `memo-${openTunnel.id}`
+                  const tunnelExpired = clockNow >= openTunnel.accessExpiresAt
+                  const exchangeId = openTunnel.exchangeId ?? openTunnel.id
+                  const statusCheck = statusCheckByExchange[exchangeId]
+                  const canCancelTunnel = tunnelExpired
+                    && String(openTunnel.status || 'waiting').toLowerCase() === 'waiting'
+                    && statusCheck?.status === 'waiting'
+                    && statusCheck.requestStartedAt >= openTunnel.accessExpiresAt
                   return (
                     <details className="open-tunnel-item" key={openTunnel.id ?? openTunnel.payinAddress} open={openTunnel.id === tunnel?.id}>
-                      <summary className="open-tunnel-heading"><div><strong>{route}</strong><small>{getSourceWalletName(openTunnel)}{openTunnel.fromAmount ? ` · ${openTunnel.fromAmount} ${openTunnel.fromCurrency?.toUpperCase()}` : ''}</small></div><span className="live-badge">{formatTunnelTimeRemaining(openTunnel.accessExpiresAt, clockNow)}</span></summary>
+                      <summary className="open-tunnel-heading"><div><strong>{route}</strong><small>{getSourceWalletName(openTunnel)}{openTunnel.fromAmount ? ` · ${openTunnel.fromAmount} ${openTunnel.fromCurrency?.toUpperCase()}` : ''}</small></div><span className={`live-badge ${tunnelExpired ? 'live-badge-expired' : ''}`}>{tunnelExpired ? 'EXPIRED · CLOSE' : formatTunnelTimeRemaining(openTunnel.accessExpiresAt, clockNow)}</span></summary>
                       <div className="open-tunnel-details">
-                        <p className="field-note">Send only {openTunnel.fromCurrency?.toUpperCase()} on {openTunnel.fromNetwork?.toUpperCase()} from {getSourceWalletName(openTunnel)}. Sending another asset or network can permanently lose funds.</p>
-                        <div className="notice notice-warning single-use-warning">Use this address once for this exchange only. Never reuse it for another quote or swap.</div>
-                        <div className="deposit-address"><span>Deposit address</span><code>{openTunnel.payinAddress}</code><button aria-label={copyToast?.target === addressTarget ? 'Address copied to clipboard' : 'Copy address'} aria-live="polite" className={`button button-quiet ${copyToast?.target === addressTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinAddress, 'Address', addressTarget)} type="button">{copyToast?.target === addressTarget ? '✓ Copied' : 'Copy address'}</button></div>
-                        {openTunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{openTunnel.payinExtraId}</code><button aria-label={copyToast?.target === memoTarget ? 'Memo or tag copied to clipboard' : 'Copy memo or tag'} aria-live="polite" className={`button button-quiet ${copyToast?.target === memoTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinExtraId, 'Memo or tag', memoTarget)} type="button">{copyToast?.target === memoTarget ? '✓ Copied' : 'Copy memo or tag'}</button></div>}
-                        {(openTunnel.transactionHash || openTunnel.payinHash) && <div className="transaction-hash"><span>Wallet transaction</span><code>{openTunnel.transactionHash ?? openTunnel.payinHash}</code></div>}
+                        {tunnelExpired ? (
+                          <>
+                            <div className="notice notice-warning">The address timer ended. Do not send funds to this address. Close this waiting tunnel in Auto Swap.</div>
+                            {canCancelTunnel
+                              ? <button className="button button-quiet open-tunnel-cancel" disabled={cancellingExchangeId !== ''} onClick={() => closeWaitingSwap({ ...openTunnel, exchangeId })} title="Closes tracking in Auto Swap only; this does not cancel the ChangeNOW exchange." type="button">{cancellingExchangeId === exchangeId ? 'Checking…' : 'Cancel in Auto Swap'}</button>
+                              : <p className="field-note">Checking with ChangeNOW. The close action appears after a fresh status check confirms the tunnel is still waiting for a deposit.</p>}
+                          </>
+                        ) : (
+                          <>
+                            <p className="field-note">Send only {openTunnel.fromCurrency?.toUpperCase()} on {openTunnel.fromNetwork?.toUpperCase()} from {getSourceWalletName(openTunnel)}. Sending another asset or network can permanently lose funds.</p>
+                            <div className="notice notice-warning single-use-warning">Use this address once for this exchange only. Never reuse it for another quote or swap.</div>
+                            <div className="deposit-address"><span>Deposit address</span><code>{openTunnel.payinAddress}</code><button aria-label={copyToast?.target === addressTarget ? 'Address copied to clipboard' : 'Copy address'} aria-live="polite" className={`button button-quiet ${copyToast?.target === addressTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinAddress, 'Address', addressTarget)} type="button">{copyToast?.target === addressTarget ? '✓ Copied' : 'Copy address'}</button></div>
+                            {openTunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{openTunnel.payinExtraId}</code><button aria-label={copyToast?.target === memoTarget ? 'Memo or tag copied to clipboard' : 'Copy memo or tag'} aria-live="polite" className={`button button-quiet ${copyToast?.target === memoTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinExtraId, 'Memo or tag', memoTarget)} type="button">{copyToast?.target === memoTarget ? '✓ Copied' : 'Copy memo or tag'}</button></div>}
+                            {(openTunnel.transactionHash || openTunnel.payinHash) && <div className="transaction-hash"><span>Wallet transaction</span><code>{openTunnel.transactionHash ?? openTunnel.payinHash}</code></div>}
+                          </>
+                        )}
                         {openTunnel.id && <p className="field-note">Exchange ID: {openTunnel.id}</p>}
                       </div>
                     </details>
@@ -1062,7 +1074,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               <>
                 <div className="history-list">
                   {recentSwapHistory.map((swap) => (
-                    <SwapHistoryItem key={swap.id} cancellingExchangeId={cancellingExchangeId} onCancel={closeWaitingSwap} statusCheck={statusCheckByExchange[swap.exchangeId]} swap={swap} />
+                    <SwapHistoryItem key={swap.id} swap={swap} />
                   ))}
                 </div>
                 {olderSwapHistory.length > 0 && (
@@ -1071,7 +1083,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     <div className="history-log-scroll" role="region" aria-label="Older swap history">
                     <div className="history-list">
                       {olderSwapHistory.map((swap) => (
-                        <SwapHistoryItem key={swap.id} cancellingExchangeId={cancellingExchangeId} onCancel={closeWaitingSwap} statusCheck={statusCheckByExchange[swap.exchangeId]} swap={swap} />
+                        <SwapHistoryItem key={swap.id} swap={swap} />
                       ))}
                     </div>
                     </div>

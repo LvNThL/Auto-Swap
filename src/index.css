@@ -163,6 +163,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .open-tunnel-heading strong { overflow-wrap: anywhere; font-size: 12px; }
 .open-tunnel-heading small { color: var(--muted); font-size: 9px; }
 .open-tunnel-details { padding: 0 0 14px; }
+.live-badge-expired { color: var(--warning-ink); background: var(--warning-bg); }
+.open-tunnel-cancel { margin-top: 12px; }
 .single-use-warning { margin-top: 17px; }
 .live-badge { padding: 5px 8px; border-radius: 4px; color: var(--finished-ink); background: var(--finished-bg); font-family: 'IBM Plex Mono', monospace; font-size: 8px; white-space: nowrap; }
 .field-note { margin: 17px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
