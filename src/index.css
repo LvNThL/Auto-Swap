@@ -251,7 +251,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .history-main code { color: var(--code-ink); font-family: 'IBM Plex Mono', monospace; font-size: 10px; }
 .history-blockchain-links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .history-blockchain-link { color: var(--text-button-ink); font-size: 9px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
-.exchange-id-link { color: var(--text-button-ink); text-decoration: none; }
+.exchange-id-link { color: var(--code-ink); text-decoration: underline; text-decoration-color: currentColor; text-underline-offset: 2px; }
 .history-exchange-id { overflow-wrap: anywhere; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .history-exchange-id code { color: var(--code-ink); font-family: 'IBM Plex Mono', monospace; font-size: 10px; }
 .history-archives { margin-top: 21px; padding-top: 16px; border-top: 1px solid var(--line); }
