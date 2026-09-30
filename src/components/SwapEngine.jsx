@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import Select from 'react-select'
 import { auth, functions, isFirebaseConfigured } from '../firebase.js'
@@ -24,8 +24,26 @@ const emptyPreset = {
 }
 
 const TUNNEL_ACCESS_TTL_MS = 7 * 60 * 1000
+const NEW_PRESET_VIEW = 'new'
 
-function currencyGroups(currencies) {
+function getSavedPresetView(uid) {
+  try {
+    return window.localStorage.getItem(`autoswap-open-preset-${uid}`) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function savePresetView(uid, view) {
+  try {
+    if (view) window.localStorage.setItem(`autoswap-open-preset-${uid}`, view)
+    else window.localStorage.removeItem(`autoswap-open-preset-${uid}`)
+  } catch {}
+}
+
+function currencyGroups(currencies, isSearching = false) {
+  if (isSearching) return currencies.length ? [{ label: 'Search results', options: currencies }] : []
+
   const featured = currencies.filter((currency) => currency.featured)
   const other = currencies.filter((currency) => !currency.featured)
   return [
@@ -87,8 +105,23 @@ function searchCurrencies(currencies, query) {
   const normalizedQuery = query.trim().toLowerCase()
   if (!normalizedQuery) return currencies
 
-  return currencies.filter((currency) =>
+  const matches = currencies.filter((currency) =>
     `${currency.name} ${currency.ticker} ${currency.network}`.toLowerCase().includes(normalizedQuery))
+
+  function matchRank(currency) {
+    const name = currency.name.toLowerCase()
+    const ticker = currency.ticker.toLowerCase()
+    if (name === normalizedQuery || ticker === normalizedQuery) return 0
+    if (name.startsWith(normalizedQuery) || ticker.startsWith(normalizedQuery)) return 1
+    if (name.includes(normalizedQuery) || ticker.includes(normalizedQuery)) return 2
+    return 3
+  }
+
+  return matches.sort((left, right) =>
+    matchRank(left) - matchRank(right)
+      || Number(right.featured) - Number(left.featured)
+      || left.name.localeCompare(right.name)
+      || left.network.localeCompare(right.network))
 }
 
 function getSourceWalletName() {
@@ -168,6 +201,7 @@ function SwapHistoryItem({ swap }) {
 }
 
 export default function SwapEngine({ user, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed, activePage, onNavigate, startWithNewPreset = false }) {
+  const [initialPresetView] = useState(() => getSavedPresetView(user.uid))
   const [presets, setPresets] = useState([])
   const [presetsLoading, setPresetsLoading] = useState(true)
   const [presetsLoadError, setPresetsLoadError] = useState(false)
@@ -184,9 +218,11 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [addressBookError, setAddressBookError] = useState('')
   const [fromSearch, setFromSearch] = useState('')
   const [toSearch, setToSearch] = useState('')
-  const [selectedId, setSelectedId] = useState('')
+  const [selectedId, setSelectedId] = useState(() => initialPresetView === NEW_PRESET_VIEW ? '' : initialPresetView)
   const [form, setForm] = useState(emptyPreset)
-  const [showNewPreset, setShowNewPreset] = useState(false)
+  const [showNewPreset, setShowNewPreset] = useState(() => initialPresetView === NEW_PRESET_VIEW)
+  const [routeListScrolling, setRouteListScrolling] = useState(false)
+  const routeListScrollTimeout = useRef(null)
   const [editingPresetId, setEditingPresetId] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -207,6 +243,14 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [statusCheckByExchange, setStatusCheckByExchange] = useState({})
   const [copyToast, setCopyToast] = useState(null)
   const [clockNow, setClockNow] = useState(() => Date.now())
+
+  useEffect(() => () => window.clearTimeout(routeListScrollTimeout.current), [])
+
+  function handleRouteListScroll() {
+    setRouteListScrolling(true)
+    window.clearTimeout(routeListScrollTimeout.current)
+    routeListScrollTimeout.current = window.setTimeout(() => setRouteListScrolling(false), 700)
+  }
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
   const waitingTunnelCount = pendingSwaps.filter((swap) => String(swap.status || 'waiting').toLowerCase() === 'waiting').length
@@ -270,6 +314,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     entry.purpose === 'destination' && entry.ticker === selectedToCurrency?.ticker && entry.network === selectedToCurrency?.network)
   const refundAddressEntries = addressBookEntries.filter((entry) =>
     entry.purpose === 'refund' && entry.ticker === selectedFromCurrency?.ticker && entry.network === selectedFromCurrency?.network)
+  const managedAddressPurpose = addressBookDialog === 'manage-destination' ? 'destination' : 'refund'
+  const managedAddressEntries = addressBookEntries.filter((entry) => entry.purpose === managedAddressPurpose)
 
   async function loadSwapHistory() {
     const getHistory = httpsCallable(functions, 'getSwapHistory')
@@ -455,10 +501,30 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     const saved = await listPresets(user.uid)
     setPresets(saved)
     setPresetsLoadError(false)
-    if (!saved.some((preset) => preset.id === selectedId)) setSelectedId(saved[0]?.id ?? '')
-    if (openNewOnExisting && saved.length > 0) {
-      setForm(emptyPreset)
+    const savedView = getSavedPresetView(user.uid)
+    const savedViewExists = saved.some((preset) => preset.id === savedView)
+
+    if (saved.length === 0) {
+      setSelectedId('')
+      setShowNewPreset(false)
+      savePresetView(user.uid, '')
+    } else if (savedView === NEW_PRESET_VIEW) {
+      setSelectedId(saved.some((preset) => preset.id === selectedId) ? selectedId : saved[0].id)
       setShowNewPreset(true)
+    } else if (savedViewExists) {
+      setSelectedId(savedView)
+      setShowNewPreset(false)
+    } else {
+      const currentPresetExists = saved.some((preset) => preset.id === selectedId)
+      const fallbackPresetId = currentPresetExists ? selectedId : saved[0].id
+      setSelectedId(fallbackPresetId)
+      if (openNewOnExisting) {
+        setForm(emptyPreset)
+        setShowNewPreset(true)
+        savePresetView(user.uid, NEW_PRESET_VIEW)
+      } else {
+        savePresetView(user.uid, fallbackPresetId)
+      }
     }
   }
 
@@ -660,6 +726,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
   function cancelPresetForm() {
     setShowNewPreset(false)
+    savePresetView(user.uid, selectedId)
     setEditingPresetId('')
     setForm(emptyPreset)
     setFromSearch('')
@@ -680,6 +747,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setError('')
     setNotice('')
     setHistoryError('')
+    savePresetView(user.uid, NEW_PRESET_VIEW)
     setShowNewPreset(true)
   }
 
@@ -708,7 +776,10 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         savedPresetId = await createPreset(user.uid, preset)
       }
       await refreshPresets()
-      if (savedPresetId) setSelectedId(savedPresetId)
+      if (savedPresetId) {
+        setSelectedId(savedPresetId)
+        savePresetView(user.uid, savedPresetId)
+      }
       setQuote(null)
       setConfirming(false)
       setNotice('')
@@ -865,13 +936,14 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           </div>
           {presetsLoading && <p className="empty-routes" role="status">Loading saved routes…</p>}
           {!presetsLoading && !presetsLoadError && presets.length === 0 && <p className="empty-routes">No routes saved yet.</p>}
-          <nav className="route-list" aria-label="Saved routes">
+          <nav className={`route-list ${routeListScrolling ? 'route-list-scrolling' : ''}`} aria-label="Saved routes" onScroll={handleRouteListScroll}>
             {presets.map((preset) => (
               <button
                 className={`route-item ${selectedId === preset.id ? 'route-item-active' : ''}`}
                 key={preset.id}
                 onClick={() => {
                   setSelectedId(preset.id)
+                  savePresetView(user.uid, preset.id)
                   setShowNewPreset(false)
                   setEditingPresetId('')
                   setForm(emptyPreset)
@@ -928,7 +1000,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                       if (action.action === 'input-change') setFromSearch(value)
                       return value
                     }}
-                    options={currencyGroups(matchingFromCurrencies)}
+                    options={currencyGroups(matchingFromCurrencies, Boolean(fromSearchLower))}
                     placeholder={currenciesLoading ? 'Loading assets…' : 'Search by coin, ticker, or network'}
                     value={selectedFromCurrency}
                     filterOption={null}
@@ -959,7 +1031,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                       if (action.action === 'input-change') setToSearch(value)
                       return value
                     }}
-                    options={currencyGroups(matchingToCurrencies)}
+                    options={currencyGroups(matchingToCurrencies, Boolean(toSearchLower))}
                     placeholder={currenciesLoading ? 'Loading assets…' : 'Search by coin, ticker, or network'}
                     value={selectedToCurrency}
                     filterOption={null}
@@ -989,7 +1061,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     {destinationAddressEntries.map((entry) => <option value={entry.id} key={entry.id}>{entry.label}</option>)}
                   </select>
                   <button className="button button-quiet" onClick={() => beginSaveAddress('destination')} type="button">Save destination address</button>
-                  <button className="button button-quiet" onClick={() => setAddressBookDialog('manage')} type="button">Manage address book</button>
+                  <button className="button button-quiet" onClick={() => setAddressBookDialog('manage-destination')} type="button">Manage address book</button>
                 </div>
                 <label className="field-wide">Refund address <span className="optional-label">Optional. Used only if the exchange refunds the swap.</span><input name="refundAddress" value={form.refundAddress} onChange={updateForm} autoComplete="off" placeholder="Crypto address on the send network" /></label>
                 {selectedFromCurrency?.hasExternalId && <label className="field-wide">Refund memo or tag<input name="refundExtraId" value={form.refundExtraId} onChange={updateForm} autoComplete="off" placeholder="Optional refund memo or tag" /></label>}
@@ -999,6 +1071,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     {refundAddressEntries.map((entry) => <option value={entry.id} key={entry.id}>{entry.label}</option>)}
                   </select>
                   <button className="button button-quiet" onClick={() => beginSaveAddress('refund')} type="button">Save refund address</button>
+                  <button className="button button-quiet" onClick={() => setAddressBookDialog('manage-refund')} type="button">Manage address book</button>
                 </div>
                 <p className="field-note field-wide">Use a wallet that can send the selected asset on the selected network. Only pairs supported by ChangeNOW can be quoted; verify the live quote before creating a deposit tunnel.</p>
                 <div className="form-actions field-wide"><button className="button button-quiet" disabled={busy} onClick={cancelPresetForm} type="button">Cancel</button><button className="button button-primary" disabled={busy || currenciesLoading || !selectedFromCurrency?.canSell || !selectedToCurrency?.canBuy} type="submit">{busy ? 'Saving…' : editingPresetId ? 'Save changes' : 'Save preset'}</button></div>
@@ -1092,7 +1165,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           <section className="panel history-panel" aria-labelledby="swap-history-title">
             <div className="panel-heading"><div><p className="eyebrow">EXCHANGE ACTIVITY</p><h2 id="swap-history-title">Swap History</h2></div></div>
             {historyError && !showNewPreset && <div className="notice notice-warning" role="status">{historyError}</div>}
-            {historyLoading ? <p className="history-empty">Loading exchange activity…</p> : visibleSwapHistory.length === 0 ? <p className="history-empty">Swaps appear here as Waiting when a deposit tunnel opens. If a tunnel expires before a deposit is received, it is marked Cancelled. Once a deposit is detected, the swap remains in history through processing and completion.</p> : (
+            {historyLoading ? <p className="history-empty">Loading exchange activity…</p> : visibleSwapHistory.length === 0 ? <p className="history-empty">Swaps appear here when a deposit tunnel is created. If the 7-minute address window ends before a deposit, close the tunnel in AutoSwap; it will show as “Closed in AutoSwap” or “Expired” if ChangeNOW expires it. Deposited swaps remain here through processing and completion.</p> : (
               <>
                 <div className="history-list">
                   {recentSwapHistory.map((swap) => (
@@ -1136,7 +1209,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddressBookDialog('') }}>
           <section className="confirm-modal address-book-modal" role="dialog" aria-modal="true" aria-labelledby="address-book-title">
             <p className="eyebrow">PRIVATE TO YOUR ACCOUNT</p>
-            <h2 id="address-book-title">{addressBookDialog === 'save' ? 'Save Address' : 'Address Book'}</h2>
+            <h2 id="address-book-title">{addressBookDialog === 'save' ? 'Save Address' : `${managedAddressPurpose === 'destination' ? 'Destination' : 'Refund'} Address Book`}</h2>
             {addressBookDialog === 'save' ? (
               <form className="address-save-form" onSubmit={saveAddress}>
                 <p className="muted">{addressDraft.ticker.toUpperCase()} on {addressDraft.network.toUpperCase()} · {addressDraft.purpose === 'destination' ? 'Destination' : 'Refund'} address</p>
@@ -1146,11 +1219,11 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               </form>
             ) : (
               <>
-                {addressBookEntries.length === 0
-                  ? <p className="muted">No saved addresses yet.</p>
-                  : <ul className="address-book-list">{addressBookEntries.map((entry) => (
+                {managedAddressEntries.length === 0
+                  ? <p className="muted">No saved {managedAddressPurpose} addresses yet.</p>
+                  : <ul className="address-book-list">{managedAddressEntries.map((entry) => (
                     <li className="address-book-item" key={entry.id}>
-                      <div><strong>{entry.label}</strong><span>{entry.ticker.toUpperCase()} · {entry.network.toUpperCase()} · {entry.purpose}</span><code>{entry.address}</code>{entry.extraId && <small>Memo or tag: {entry.extraId}</small>}</div>
+                      <div><strong>{entry.label}</strong><span>{entry.ticker.toUpperCase()} · {entry.network.toUpperCase()}</span><code>{entry.address}</code>{entry.extraId && <small>Memo or tag: {entry.extraId}</small>}</div>
                       <button className="button button-quiet" disabled={addressBookBusy} onClick={() => removeAddress(entry)} type="button">Remove</button>
                     </li>
                   ))}</ul>}

@@ -113,7 +113,12 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .route-rail .eyebrow, .route-rail .empty-routes, .route-rail .rail-note, .route-rail .route-item-path, .route-rail .route-item-path b, .route-rail .route-item-mode { color: var(--nav-muted); }
 .icon-button { width: 31px; height: 31px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); cursor: pointer; font-size: 21px; }
 .route-rail .icon-button { border-color: var(--nav-line); background: var(--nav-surface); color: var(--nav-ink); }
-.route-list { display: grid; gap: 7px; margin-top: 23px; }
+.route-list { display: grid; gap: 7px; margin-top: 23px; scrollbar-color: transparent transparent; scrollbar-width: none; }
+.route-list::-webkit-scrollbar { height: 4px; }
+.route-list::-webkit-scrollbar-track { background: transparent; }
+.route-list::-webkit-scrollbar-thumb { border-radius: 8px; background: transparent; transition: background-color .25s ease; }
+.route-list-scrolling { scrollbar-color: var(--scrollbar-thumb) transparent; scrollbar-width: thin; }
+.route-list-scrolling::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); }
 .route-item { padding: 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; text-align: left; cursor: pointer; }
 .route-item:hover { background: var(--nav-hover); }
 .route-item-active { border-color: var(--nav-line); background: var(--nav-active); box-shadow: 0 4px 18px rgba(32, 41, 35, .035); }
