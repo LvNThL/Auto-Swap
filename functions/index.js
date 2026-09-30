@@ -4,7 +4,7 @@ const { defineSecret } = require('firebase-functions/params')
 const { initializeApp } = require('firebase-admin/app')
 const { getFirestore, Timestamp } = require('firebase-admin/firestore')
 const { getStorage } = require('firebase-admin/storage')
-const { quoteMatchesExchange, quoteMatchesPreset, quoteExpired } = require('./quote-validation')
+const { normalizeExchangeFlow, quoteMatchesExchange, quoteMatchesPreset, quoteExpired, getQuoteExpiresAt } = require('./quote-validation')
 const { normalizeCurrencyCatalog } = require('./currency-catalog')
 const {
   depositReceived,
@@ -45,13 +45,13 @@ const database = getFirestore()
 const CHANGE_NOW_URL = 'https://api.changenow.io/v2/exchange'
 const QUOTE_COOLDOWN_MS = 2000
 const CREATE_COOLDOWN_MS = 10000
-const QUOTE_TTL_MS = 60000
-const TUNNEL_ACCESS_TTL_MS = 7 * 60 * 1000
+const QUOTE_TTL_MS = 10 * 60 * 1000
+const TUNNEL_ACCESS_TTL_MS = 10 * 60 * 1000
+const FIXED_RATE_TUNNEL_ACCESS_TTL_MS = 10 * 60 * 1000
 const PENDING_SWAP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 const CURRENCY_CACHE_TTL_MS = 300000
 const SAVED_RECORD_WRITE_COOLDOWN_MS = 1000
-let cachedCurrencies = null
-let cachedCurrenciesUntil = 0
+const cachedCurrencies = new Map()
 
 function requiredString(value, field, maxLength = 160) {
   if (typeof value !== 'string' || !value.trim() || value.length > maxLength) {
@@ -92,7 +92,12 @@ function getArchiveBucket() {
 }
 
 function serializeSwapHistory(snapshot) {
-  return serializeSwapHistoryRecord(snapshot.id, snapshot.data())
+  const record = snapshot.data()
+  const serialized = serializeSwapHistoryRecord(snapshot.id, record)
+  return {
+    ...serialized,
+    lastCheckedAt: record.lastProviderCheckAt?.toMillis?.() ?? serialized.updatedAt,
+  }
 }
 
 async function savePendingSwapToHistory({ uid, pendingDoc, exchangeId, transactionDetails, status, providerToAmount, cancellationReason }) {
@@ -315,7 +320,7 @@ async function consumeQuote(uid, quoteId, exchange, presetId) {
   const capacityRef = userRef.collection('_privateMeta').doc('tunnelCapacity')
   const pendingQuery = userRef.collection('swapQuotes').where('trackingStatus', '==', 'pending')
 
-  await database.runTransaction(async (transaction) => {
+  return database.runTransaction(async (transaction) => {
     const [quoteSnapshot, presetSnapshot, rateLimitSnapshot, capacitySnapshot, pendingSnapshot] = await Promise.all([
       transaction.get(quoteRef),
       transaction.get(presetRef),
@@ -341,6 +346,9 @@ async function consumeQuote(uid, quoteId, exchange, presetId) {
     }
     if (!quoteMatchesExchange(quote, exchange)) {
       throw new HttpsError('failed-precondition', 'Route details changed after quoting. Request a new quote and confirm those details.')
+    }
+    if (exchange.flow === 'fixed-rate' && (typeof quote.rateId !== 'string' || !quote.rateId)) {
+      throw new HttpsError('failed-precondition', 'The fixed-rate quote is missing its ChangeNOW rate ID. Request a new quote.')
     }
     if (quote.presetId && quote.presetId !== presetId) {
       throw new HttpsError('failed-precondition', 'This quote belongs to a different saved route. Request a new quote.')
@@ -371,6 +379,7 @@ async function consumeQuote(uid, quoteId, exchange, presetId) {
       activeTunnelIds: reservedTunnelIds,
       updatedAt: Timestamp.fromMillis(now),
     }, { merge: true })
+    return { flow: quote.flow ?? 'standard', rateId: quote.rateId ?? null }
   })
 }
 
@@ -390,12 +399,18 @@ function validateExchangeRequest(data = {}) {
   const refundExtraId = data.refundExtraId == null || data.refundExtraId === ''
     ? ''
     : requiredString(data.refundExtraId, 'refundExtraId', 256)
+  let flow
+  try {
+    flow = normalizeExchangeFlow(data.flow)
+  } catch {
+    throw new HttpsError('invalid-argument', 'Rate flow must be standard or fixed-rate.')
+  }
 
   if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(fromAmount) || !Number.isFinite(Number(fromAmount)) || Number(fromAmount) <= 0) {
     throw new HttpsError('invalid-argument', 'Amount must be a positive decimal value.')
   }
 
-  return { fromCurrency, fromNetwork, toCurrency, toNetwork, fromAmount, toAddress, toExtraId, refundAddress, refundExtraId }
+  return { fromCurrency, fromNetwork, toCurrency, toNetwork, fromAmount, toAddress, toExtraId, refundAddress, refundExtraId, flow }
 }
 
 function compareDecimalStrings(left, right) {
@@ -488,7 +503,7 @@ function buildQuery(exchange, includeAmount = false) {
     toCurrency: exchange.toCurrency,
     fromNetwork: exchange.fromNetwork,
     toNetwork: exchange.toNetwork,
-    flow: 'standard',
+    flow: exchange.flow ?? 'standard',
     type: 'direct',
   })
   if (includeAmount) parameters.set('fromAmount', exchange.fromAmount)
@@ -499,18 +514,23 @@ exports.getSwapCurrencies = onCall(
   { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
-    if (cachedCurrencies && Date.now() < cachedCurrenciesUntil) {
-      return { currencies: cachedCurrencies }
+    let flow
+    try {
+      flow = normalizeExchangeFlow(request.data?.flow)
+    } catch {
+      throw new HttpsError('invalid-argument', 'Rate flow must be standard or fixed-rate.')
     }
+    const cachedCatalog = cachedCurrencies.get(flow)
+    if (cachedCatalog && Date.now() < cachedCatalog.expiresAt) return { currencies: cachedCatalog.currencies }
 
-    const response = await callChangeNow('/currencies?active=true&flow=standard')
+    const currenciesQuery = new URLSearchParams({ active: 'true', ...(flow === 'fixed-rate' ? { fixedRate: 'true' } : { flow }) })
+    const response = await callChangeNow(`/currencies?${currenciesQuery}`)
     const currencies = normalizeCurrencyCatalog(response)
     if (currencies.length === 0) {
       throw new HttpsError('unavailable', 'ChangeNOW returned no active crypto currencies.')
     }
 
-    cachedCurrencies = currencies
-    cachedCurrenciesUntil = Date.now() + CURRENCY_CACHE_TTL_MS
+    cachedCurrencies.set(flow, { currencies, expiresAt: Date.now() + CURRENCY_CACHE_TTL_MS })
     return { currencies }
   },
 )
@@ -519,20 +539,31 @@ exports.getSwapMinimum = onCall(
   { region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
+    let flow
+    try {
+      flow = normalizeExchangeFlow(request.data?.flow)
+    } catch {
+      throw new HttpsError('invalid-argument', 'Rate flow must be standard or fixed-rate.')
+    }
     const exchange = {
       fromCurrency: requiredString(request.data?.fromCurrency, 'fromCurrency', 32).toLowerCase(),
       fromNetwork: requiredString(request.data?.fromNetwork, 'fromNetwork', 32).toLowerCase(),
       toCurrency: requiredString(request.data?.toCurrency, 'toCurrency', 32).toLowerCase(),
       toNetwork: requiredString(request.data?.toNetwork, 'toNetwork', 32).toLowerCase(),
+      flow,
     }
-    const minimum = await callChangeNow(`/min-amount?${buildQuery(exchange)}`)
-    const minimumAmount = minimum.minAmount ?? minimum.minimumAmount
+    const range = await callChangeNow(`${flow === 'fixed-rate' ? '/range' : '/min-amount'}?${buildQuery(exchange)}`)
+    const minimumAmount = range.minAmount ?? range.minimumAmount
     if ((typeof minimumAmount !== 'string' && typeof minimumAmount !== 'number') ||
       !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(String(minimumAmount))) {
-      throw new HttpsError('unavailable', 'ChangeNOW returned an invalid minimum-amount response.')
+      throw new HttpsError('unavailable', 'ChangeNOW returned an invalid amount range.')
     }
 
-    return { minimumAmount: String(minimumAmount) }
+    const maximumAmount = range.maxAmount == null ? null : String(range.maxAmount)
+    if (maximumAmount !== null && !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(maximumAmount)) {
+      throw new HttpsError('unavailable', 'ChangeNOW returned an invalid maximum amount.')
+    }
+    return { minimumAmount: String(minimumAmount), maximumAmount }
   },
 )
 
@@ -546,31 +577,53 @@ exports.getSwapQuote = onCall(
 
     await enforceRequestCooldown(request.auth.uid, 'quote', QUOTE_COOLDOWN_MS)
     const { presetId } = await getMatchingSavedPreset(request.auth.uid, request.data?.presetId, quotedExchange)
-    const minimum = await callChangeNow(`/min-amount?${buildQuery(exchange)}`)
-    const minimumAmount = minimum.minAmount ?? minimum.minimumAmount
+    const range = await callChangeNow(`${exchange.flow === 'fixed-rate' ? '/range' : '/min-amount'}?${buildQuery(exchange)}`)
+    const minimumAmount = range.minAmount ?? range.minimumAmount
     if ((typeof minimumAmount !== 'string' && typeof minimumAmount !== 'number') ||
       !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(String(minimumAmount))) {
-      throw new HttpsError('unavailable', 'ChangeNOW returned an invalid minimum-amount response.')
+      throw new HttpsError('unavailable', 'ChangeNOW returned an invalid amount range.')
+    }
+    const maximumAmount = range.maxAmount == null ? null : String(range.maxAmount)
+    if (maximumAmount !== null && !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(maximumAmount)) {
+      throw new HttpsError('unavailable', 'ChangeNOW returned an invalid maximum amount.')
     }
     if (compareDecimalStrings(exchange.fromAmount, String(minimumAmount)) < 0) {
       throw new HttpsError('failed-precondition', `Amount is below the current minimum of ${minimumAmount} ${exchange.fromCurrency.toUpperCase()}.`)
     }
+    if (maximumAmount !== null && compareDecimalStrings(exchange.fromAmount, maximumAmount) > 0) {
+      throw new HttpsError('failed-precondition', `Amount is above the current maximum of ${maximumAmount} ${exchange.fromCurrency.toUpperCase()}.`)
+    }
 
     const estimate = await callChangeNow(`/estimated-amount?${buildQuery(exchange, true)}`)
-    const estimatedAmount = estimate.estimatedAmount ?? estimate.toAmount
+    const estimatedAmount = estimate.estimatedAmount ?? estimate.toAmount ?? estimate.estimatedDeposit
     if ((typeof estimatedAmount !== 'string' && typeof estimatedAmount !== 'number') ||
       !Number.isFinite(Number(estimatedAmount)) || Number(estimatedAmount) <= 0) {
       throw new HttpsError('failed-precondition', 'ChangeNOW did not return a usable live estimate for this exact pair. No deposit address can be created; do not send funds.')
     }
 
     const quotedAt = Date.now()
-    const quoteExpiresAt = quotedAt + QUOTE_TTL_MS
+    const rateId = typeof estimate.rateId === 'string' && estimate.rateId.trim() ? estimate.rateId.trim() : null
+    const validUntil = exchange.flow === 'fixed-rate' ? estimate.validUntil ?? null : null
+    if (exchange.flow === 'fixed-rate' && (!rateId || validUntil == null)) {
+      throw new HttpsError('unavailable', 'ChangeNOW did not return a valid fixed-rate quote. No deposit address was created.')
+    }
+    let quoteExpiresAt
+    try {
+      quoteExpiresAt = getQuoteExpiresAt(quotedAt, QUOTE_TTL_MS, validUntil)
+    } catch {
+      throw new HttpsError('unavailable', 'ChangeNOW returned an invalid fixed-rate quote expiry.')
+    }
+    if (quoteExpiresAt <= quotedAt) {
+      throw new HttpsError('failed-precondition', 'The ChangeNOW quote expired before it could be confirmed. Request a new quote.')
+    }
     const quoteRef = database.collection('users').doc(request.auth.uid).collection('swapQuotes').doc()
     await quoteRef.create({
       userId: request.auth.uid,
       ...quotedExchange,
+      ...(rateId ? { rateId } : {}),
       presetId,
       minimumAmount: String(minimumAmount),
+      maximumAmount,
       estimatedAmount: String(estimatedAmount),
       createdAt: Timestamp.fromMillis(quotedAt),
       expiresAt: Timestamp.fromMillis(quoteExpiresAt),
@@ -579,7 +632,9 @@ exports.getSwapQuote = onCall(
 
     return {
       quoteId: quoteRef.id,
+      flow: exchange.flow,
       minimumAmount: String(minimumAmount),
+      maximumAmount,
       estimatedAmount: String(estimatedAmount),
       transactionSpeedForecast: estimate.transactionSpeedForecast ?? null,
       warningMessage: estimate.warningMessage ?? null,
@@ -599,7 +654,7 @@ exports.createSwapTunnel = onCall(
     const presetId = requiredRecordId(request.data?.presetId, 'presetId')
 
     const uid = request.auth.uid
-    await consumeQuote(uid, quoteId, { ...exchange, toAddress }, presetId)
+    const quote = await consumeQuote(uid, quoteId, { ...exchange, toAddress }, presetId)
     let result
     try {
       result = await callChangeNow('', {
@@ -614,7 +669,8 @@ exports.createSwapTunnel = onCall(
           ...(exchange.toExtraId ? { extraId: exchange.toExtraId } : {}),
           ...(exchange.refundAddress ? { refundAddress: exchange.refundAddress } : {}),
           ...(exchange.refundExtraId ? { refundExtraId: exchange.refundExtraId } : {}),
-          flow: 'standard',
+          flow: exchange.flow,
+          ...(exchange.flow === 'fixed-rate' ? { rateId: quote.rateId } : {}),
           type: 'direct',
         },
       })
@@ -632,13 +688,15 @@ exports.createSwapTunnel = onCall(
       toNetwork: exchange.toNetwork,
     })
     const tunnelOpenedAt = Date.now()
-    const accessExpiresAt = tunnelOpenedAt + TUNNEL_ACCESS_TTL_MS
+    const tunnelTtlMs = exchange.flow === 'fixed-rate' ? FIXED_RATE_TUNNEL_ACCESS_TTL_MS : TUNNEL_ACCESS_TTL_MS
+    const accessExpiresAt = tunnelOpenedAt + tunnelTtlMs
     let trackingSaved = false
     if (typeof exchangeId === 'string') {
       try {
         await database.collection('users').doc(uid).collection('swapQuotes').doc(quoteId).update({
           exchangeId,
           status: typeof result.status === 'string' ? result.status : 'waiting',
+          flow: exchange.flow,
           trackingStatus: 'pending',
           providerLiveTunnel: true,
           ...(hasPayinAddress ? { payinAddress } : {}),
@@ -668,6 +726,7 @@ exports.createSwapTunnel = onCall(
       fromAmount: String(result.fromAmount ?? exchange.fromAmount),
       toAmount: result.toAmount == null ? null : String(result.toAmount),
       status: result.status ?? 'waiting',
+      flow: exchange.flow,
       accessExpiresAt,
       trackingSaved,
     }
@@ -689,6 +748,7 @@ exports.getSwapHistory = onCall(
       pendingSwaps: pendingSnapshot.docs.map((pendingDoc) => ({
         id: pendingDoc.id,
         presetId: pendingDoc.get('presetId') ?? null,
+        flow: pendingDoc.get('flow') ?? 'standard',
         exchangeId: pendingDoc.get('exchangeId'),
         status: pendingDoc.get('status') ?? 'waiting',
         payinAddress: pendingDoc.get('payinAddress') ?? null,
@@ -704,6 +764,7 @@ exports.getSwapHistory = onCall(
         payinExplorerUrl: pendingDoc.get('payinExplorerUrl') ?? null,
         payoutExplorerUrl: pendingDoc.get('payoutExplorerUrl') ?? null,
         createdAt: pendingDoc.get('tunnelOpenedAt')?.toMillis() ?? pendingDoc.get('createdAt')?.toMillis() ?? null,
+        lastCheckedAt: pendingDoc.get('updatedAt')?.toMillis() ?? null,
         accessExpiresAt: pendingDoc.get('tunnelAccessExpiresAt')?.toMillis() ?? null,
       })),
     }

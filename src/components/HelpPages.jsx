@@ -16,7 +16,7 @@ const faqSections = [
   {
     title: 'Deposits and tracking',
     entries: [
-      ['What does the 7-minute timer mean?', 'It controls how long the address is shown here. It does not cancel the ChangeNOW exchange. Don’t send to an expired address.'],
+      ['What does the 10-minute timer mean?', 'It controls how long the address is shown here. It does not cancel the ChangeNOW exchange. Don’t send to an expired address.'],
       ['What does “Close in AutoSwap” do?', 'It closes tracking here, not the ChangeNOW exchange. Close only if you have not sent funds.'],
       ['Why can’t I close an expired tunnel yet?', 'AutoSwap checks ChangeNOW first. The close option appears only if it still reports “Waiting.”'],
       ['Why can I have only three waiting tunnels?', 'You can have three tunnels waiting for deposits. Deposit to or close an unfunded tunnel before opening another.'],

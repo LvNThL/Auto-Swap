@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { quoteMatchesExchange, quoteMatchesPreset, quoteExpired } = require('../quote-validation')
+const { normalizeExchangeFlow, quoteMatchesExchange, quoteMatchesPreset, quoteExpired, getQuoteExpiresAt } = require('../quote-validation')
 
 const exchange = {
   fromCurrency: 'eth',
@@ -14,8 +14,18 @@ const exchange = {
   refundExtraId: '',
 }
 
+test('accepts standard and fixed-rate flows and defaults to standard', () => {
+  assert.equal(normalizeExchangeFlow(undefined), 'standard')
+  assert.equal(normalizeExchangeFlow('standard'), 'standard')
+  assert.equal(normalizeExchangeFlow('fixed-rate'), 'fixed-rate')
+  assert.throws(() => normalizeExchangeFlow('unknown'), /standard or fixed-rate/)
+})
+
 test('matches the exact route and destination from the quote', () => {
   assert.equal(quoteMatchesExchange({ ...exchange }, { ...exchange }), true)
+  assert.equal(quoteMatchesExchange({ ...exchange, flow: 'fixed-rate' }, { ...exchange, flow: 'fixed-rate' }), true)
+  assert.equal(quoteMatchesExchange({ ...exchange }, { ...exchange, flow: 'fixed-rate' }), false)
+  assert.equal(quoteMatchesExchange({ ...exchange, flow: 'fixed-rate' }, { ...exchange }), false)
 })
 
 test('rejects a changed amount, pair, network, or destination', () => {
@@ -61,4 +71,11 @@ test('expires quotes at and after their expiry timestamp', () => {
   assert.equal(quoteExpired(60000, 59999), false)
   assert.equal(quoteExpired(60000, 60000), true)
   assert.equal(quoteExpired(undefined, 0), true)
+})
+
+test('caps local quote expiry at the provider validity time', () => {
+  assert.equal(getQuoteExpiresAt(1000, 600000), 601000)
+  assert.equal(getQuoteExpiresAt(1000, 600000, '1970-01-01T00:04:00.000Z'), 240000)
+  assert.equal(getQuoteExpiresAt(1000, 600000, 240), 240000)
+  assert.throws(() => getQuoteExpiresAt(1000, 600000, 'invalid'), /invalid quote expiry/)
 })
