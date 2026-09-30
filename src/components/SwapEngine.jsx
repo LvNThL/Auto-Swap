@@ -258,11 +258,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       pending: true,
     })),
   ].sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
-  const waitingSwapRows = visibleSwapHistory.filter((swap) =>
-    swap.pending && String(swap.status || '').toLowerCase() === 'waiting')
-  const olderWaitingSwaps = waitingSwapRows.slice(1)
-  const olderWaitingIds = new Set(olderWaitingSwaps.map((swap) => swap.id))
-  const recentSwapHistory = visibleSwapHistory.filter((swap) => !olderWaitingIds.has(swap.id))
+  const recentSwapHistory = visibleSwapHistory.slice(0, 7)
+  const olderSwapHistory = visibleSwapHistory.slice(7)
   const fromCurrencies = currencies.filter((currency) => currency.canSell)
   const toCurrencies = currencies.filter((currency) => currency.canBuy)
   const fromSearchLower = fromSearch.trim().toLowerCase()
@@ -1034,7 +1031,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           {openTunnels.length > 0 && (
             <section className="panel tunnel-panel">
               <div className="panel-heading"><div><p className="eyebrow">DEPOSIT DETAILS</p><h2>Open Tunnels</h2></div><span className="live-badge">{openTunnels.length} {openTunnels.length === 1 ? 'ADDRESS' : 'ADDRESSES'} AVAILABLE</span></div>
-              <p className="field-note">Each address is shown for its own seven-minute window, across all routes. When a window ends, the address is removed from this panel; the timer does not deactivate it with ChangeNOW.</p>
               {tunnelNotice && <div className="notice notice-success" role="status">{tunnelNotice}</div>}
               <div className="open-tunnel-list">
                 {openTunnels.map((openTunnel) => {
@@ -1042,15 +1038,17 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   const addressTarget = `address-${openTunnel.id}`
                   const memoTarget = `memo-${openTunnel.id}`
                   return (
-                    <article className="open-tunnel-item" key={openTunnel.id ?? openTunnel.payinAddress}>
-                      <div className="open-tunnel-heading"><div><strong>{route}</strong><small>{getSourceWalletName(openTunnel)}{openTunnel.fromAmount ? ` · ${openTunnel.fromAmount} ${openTunnel.fromCurrency?.toUpperCase()}` : ''}</small></div><span className="live-badge">{formatTunnelTimeRemaining(openTunnel.accessExpiresAt, clockNow)}</span></div>
-                      <p className="field-note">Send only {openTunnel.fromCurrency?.toUpperCase()} on {openTunnel.fromNetwork?.toUpperCase()} from {getSourceWalletName(openTunnel)}. Sending another asset or network can permanently lose funds.</p>
-                      <div className="notice notice-warning single-use-warning">Use this address once for this exchange only. Never reuse it for another quote or swap.</div>
-                      <div className="deposit-address"><span>Deposit address</span><code>{openTunnel.payinAddress}</code><button aria-label={copyToast?.target === addressTarget ? 'Address copied to clipboard' : 'Copy address'} aria-live="polite" className={`button button-quiet ${copyToast?.target === addressTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinAddress, 'Address', addressTarget)} type="button">{copyToast?.target === addressTarget ? '✓ Copied' : 'Copy address'}</button></div>
-                      {openTunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{openTunnel.payinExtraId}</code><button aria-label={copyToast?.target === memoTarget ? 'Memo or tag copied to clipboard' : 'Copy memo or tag'} aria-live="polite" className={`button button-quiet ${copyToast?.target === memoTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinExtraId, 'Memo or tag', memoTarget)} type="button">{copyToast?.target === memoTarget ? '✓ Copied' : 'Copy memo or tag'}</button></div>}
-                      {(openTunnel.transactionHash || openTunnel.payinHash) && <div className="transaction-hash"><span>Wallet transaction</span><code>{openTunnel.transactionHash ?? openTunnel.payinHash}</code></div>}
-                      {openTunnel.id && <p className="field-note">Exchange ID: {openTunnel.id}</p>}
-                    </article>
+                    <details className="open-tunnel-item" key={openTunnel.id ?? openTunnel.payinAddress} open={openTunnel.id === tunnel?.id}>
+                      <summary className="open-tunnel-heading"><div><strong>{route}</strong><small>{getSourceWalletName(openTunnel)}{openTunnel.fromAmount ? ` · ${openTunnel.fromAmount} ${openTunnel.fromCurrency?.toUpperCase()}` : ''}</small></div><span className="live-badge">{formatTunnelTimeRemaining(openTunnel.accessExpiresAt, clockNow)}</span></summary>
+                      <div className="open-tunnel-details">
+                        <p className="field-note">Send only {openTunnel.fromCurrency?.toUpperCase()} on {openTunnel.fromNetwork?.toUpperCase()} from {getSourceWalletName(openTunnel)}. Sending another asset or network can permanently lose funds.</p>
+                        <div className="notice notice-warning single-use-warning">Use this address once for this exchange only. Never reuse it for another quote or swap.</div>
+                        <div className="deposit-address"><span>Deposit address</span><code>{openTunnel.payinAddress}</code><button aria-label={copyToast?.target === addressTarget ? 'Address copied to clipboard' : 'Copy address'} aria-live="polite" className={`button button-quiet ${copyToast?.target === addressTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinAddress, 'Address', addressTarget)} type="button">{copyToast?.target === addressTarget ? '✓ Copied' : 'Copy address'}</button></div>
+                        {openTunnel.payinExtraId && <div className="deposit-address"><span>Required deposit memo or tag</span><code>{openTunnel.payinExtraId}</code><button aria-label={copyToast?.target === memoTarget ? 'Memo or tag copied to clipboard' : 'Copy memo or tag'} aria-live="polite" className={`button button-quiet ${copyToast?.target === memoTarget ? 'button-copy-confirmed' : ''}`} onClick={() => copyToClipboard(openTunnel.payinExtraId, 'Memo or tag', memoTarget)} type="button">{copyToast?.target === memoTarget ? '✓ Copied' : 'Copy memo or tag'}</button></div>}
+                        {(openTunnel.transactionHash || openTunnel.payinHash) && <div className="transaction-hash"><span>Wallet transaction</span><code>{openTunnel.transactionHash ?? openTunnel.payinHash}</code></div>}
+                        {openTunnel.id && <p className="field-note">Exchange ID: {openTunnel.id}</p>}
+                      </div>
+                    </details>
                   )
                 })}
               </div>
@@ -1067,13 +1065,15 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     <SwapHistoryItem key={swap.id} cancellingExchangeId={cancellingExchangeId} onCancel={closeWaitingSwap} statusCheck={statusCheckByExchange[swap.exchangeId]} swap={swap} />
                   ))}
                 </div>
-                {olderWaitingSwaps.length > 0 && (
-                  <details className="history-older-waiting">
-                    <summary>Older waiting tunnels ({olderWaitingSwaps.length})</summary>
+                {olderSwapHistory.length > 0 && (
+                  <details className="history-log-more">
+                    <summary>Older swaps ({olderSwapHistory.length})</summary>
+                    <div className="history-log-scroll" role="region" aria-label="Older swap history">
                     <div className="history-list">
-                      {olderWaitingSwaps.map((swap) => (
+                      {olderSwapHistory.map((swap) => (
                         <SwapHistoryItem key={swap.id} cancellingExchangeId={cancellingExchangeId} onCancel={closeWaitingSwap} statusCheck={statusCheckByExchange[swap.exchangeId]} swap={swap} />
                       ))}
+                    </div>
                     </div>
                   </details>
                 )}
