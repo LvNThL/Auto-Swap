@@ -18,6 +18,7 @@ export default defineConfig({
         description: 'Prepare and review cross-exchange crypto swap routes.',
         theme_color: '#f1f3ee',
         background_color: '#f1f3ee',
+        display_override: ['edge-to-edge', 'standalone'],
         display: 'standalone',
         start_url: './',
         icons: [
