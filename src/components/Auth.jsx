@@ -12,12 +12,23 @@ import {
 import { auth } from '../firebase.js'
 
 const SAVED_USERNAME_KEY = 'autoswap-saved-username'
+const SAVE_USERNAME_PREFERENCE_KEY = 'autoswap-save-username'
+const REMEMBER_ME_PREFERENCE_KEY = 'autoswap-remember-me'
 
 function getSavedUsername() {
   try {
     return window.localStorage.getItem(SAVED_USERNAME_KEY) ?? ''
   } catch {
     return ''
+  }
+}
+
+function getSavedPreference(key, fallback = false) {
+  try {
+    const preference = window.localStorage.getItem(key)
+    return preference === null ? fallback : preference === 'true'
+  } catch {
+    return fallback
   }
 }
 
@@ -47,8 +58,8 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
   const [mode, setMode] = useState(initialMode)
   const [email, setEmail] = useState(getSavedUsername)
   const [password, setPassword] = useState('')
-  const [saveUsername, setSaveUsername] = useState(() => Boolean(getSavedUsername()))
-  const [rememberMe, setRememberMe] = useState(true)
+  const [saveUsername, setSaveUsername] = useState(() => getSavedPreference(SAVE_USERNAME_PREFERENCE_KEY, Boolean(getSavedUsername())))
+  const [rememberMe, setRememberMe] = useState(() => getSavedPreference(REMEMBER_ME_PREFERENCE_KEY))
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [verificationReminderOpen, setVerificationReminderOpen] = useState(false)
@@ -64,6 +75,18 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
       else if (!saveUsername) window.localStorage.removeItem(SAVED_USERNAME_KEY)
     } catch {}
   }, [email, mode, saveUsername])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SAVE_USERNAME_PREFERENCE_KEY, String(saveUsername))
+    } catch {}
+  }, [saveUsername])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(REMEMBER_ME_PREFERENCE_KEY, String(rememberMe))
+    } catch {}
+  }, [rememberMe])
 
   useEffect(() => {
     if (!verificationUser) return
