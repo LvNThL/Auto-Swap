@@ -34,6 +34,7 @@ export default function App() {
   const [installPrompt, setInstallPrompt] = useState(null)
   const [isInstalled, setIsInstalled] = useState(false)
   const [activePage, setActivePage] = useState(pageFromHash)
+  const [initialPresetPageUser, setInitialPresetPageUser] = useState('')
 
   function navigateTo(page) {
     const nextHash = page === 'swap' ? '#/swap' : `#/${page}`
@@ -53,6 +54,14 @@ export default function App() {
     const pageTitle = activePage === 'faq' ? 'FAQ' : activePage === 'account' ? 'Account' : 'Swap'
     document.title = `${pageTitle} | AutoSwap Route Desk`
   }, [activePage])
+
+  useEffect(() => {
+    if (!user?.emailVerified) {
+      setInitialPresetPageUser('')
+    } else if (activePage === 'swap') {
+      setInitialPresetPageUser(user.uid)
+    }
+  }, [activePage, user?.emailVerified, user?.uid])
 
   useEffect(() => {
     const standalone = window.matchMedia('(display-mode: standalone)')
@@ -121,6 +130,6 @@ export default function App() {
   if (user && user.emailVerified && activePage === 'account') return <HelpPages {...sharedPageProps} page="account" />
   if (user && !user.emailVerified) return <Auth {...sharedPageProps} verificationUser={user} />
   return user
-    ? <Suspense fallback={<main className="loading-screen">Loading secure workspace…</main>}><SwapEngine {...sharedPageProps} key={user.uid} /></Suspense>
+    ? <Suspense fallback={<main className="loading-screen">Loading secure workspace…</main>}><SwapEngine {...sharedPageProps} key={user.uid} startWithNewPreset={initialPresetPageUser !== user.uid} /></Suspense>
     : <Auth {...sharedPageProps} initialMode={activePage === 'signup' ? 'register' : 'login'} />
 }

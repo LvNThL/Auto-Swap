@@ -203,7 +203,7 @@ async function getMatchingSavedPreset(uid, value, exchange) {
     throw new HttpsError('failed-precondition', 'The selected saved route has changed. Refresh routes and request a new quote.')
   }
 
-  return { presetId, sourceName: preset.sourceName ?? '' }
+  return { presetId }
 }
 
 async function saveUserRecord(uid, collectionName, record, maximum, countField, recordId = '') {
@@ -543,7 +543,7 @@ exports.getSwapQuote = onCall(
     const quotedExchange = { ...exchange, toAddress }
 
     await enforceRequestCooldown(request.auth.uid, 'quote', QUOTE_COOLDOWN_MS)
-    const { presetId, sourceName } = await getMatchingSavedPreset(request.auth.uid, request.data?.presetId, quotedExchange)
+    const { presetId } = await getMatchingSavedPreset(request.auth.uid, request.data?.presetId, quotedExchange)
     const minimum = await callChangeNow(`/min-amount?${buildQuery(exchange)}`)
     const minimumAmount = minimum.minAmount ?? minimum.minimumAmount
     if ((typeof minimumAmount !== 'string' && typeof minimumAmount !== 'number') ||
@@ -568,7 +568,6 @@ exports.getSwapQuote = onCall(
       userId: request.auth.uid,
       ...quotedExchange,
       presetId,
-      sourceName,
       minimumAmount: String(minimumAmount),
       estimatedAmount: String(estimatedAmount),
       createdAt: Timestamp.fromMillis(quotedAt),
@@ -692,7 +691,6 @@ exports.getSwapHistory = onCall(
         status: pendingDoc.get('status') ?? 'waiting',
         payinAddress: pendingDoc.get('payinAddress') ?? null,
         payinExtraId: pendingDoc.get('payinExtraId') ?? null,
-        sourceName: pendingDoc.get('sourceName') ?? '',
         fromCurrency: pendingDoc.get('fromCurrency'),
         fromNetwork: pendingDoc.get('fromNetwork'),
         fromAmount: pendingDoc.get('fromAmount'),

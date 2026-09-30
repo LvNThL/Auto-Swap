@@ -12,13 +12,11 @@ import {
 import { createPreset, deletePreset, listPresets, updatePreset } from '../services/PresetManager.js'
 
 const emptyPreset = {
-  sourceName: '',
   fromCurrency: 'btc',
   fromNetwork: 'btc',
   toCurrency: 'eth',
   toNetwork: 'eth',
   fromAmount: '',
-  destinationName: '',
   destinationAddress: '',
   destinationExtraId: '',
   refundAddress: '',
@@ -93,13 +91,12 @@ function searchCurrencies(currencies, query) {
     `${currency.name} ${currency.ticker} ${currency.network}`.toLowerCase().includes(normalizedQuery))
 }
 
-function getSourceWalletName(preset) {
-  return preset.sourceName?.trim() || 'Source Wallet'
+function getSourceWalletName() {
+  return 'Source Wallet'
 }
 
-function getDestinationWalletName(preset) {
-  if (typeof preset.sourceName === 'undefined') return 'Destination Wallet'
-  return preset.destinationName?.trim() || 'Destination Wallet'
+function getDestinationWalletName() {
+  return 'Destination Wallet'
 }
 
 function getPresetName(preset) {
@@ -170,8 +167,10 @@ function SwapHistoryItem({ swap }) {
   )
 }
 
-export default function SwapEngine({ user, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed, activePage, onNavigate }) {
+export default function SwapEngine({ user, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed, activePage, onNavigate, startWithNewPreset = false }) {
   const [presets, setPresets] = useState([])
+  const [presetsLoading, setPresetsLoading] = useState(true)
+  const [presetsLoadError, setPresetsLoadError] = useState(false)
   const [currencies, setCurrencies] = useState([])
   const [currenciesLoading, setCurrenciesLoading] = useState(true)
   const [currencyError, setCurrencyError] = useState('')
@@ -226,7 +225,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   if (tunnel?.payinAddress && (clockNow < tunnel.accessExpiresAt || String(tunnel.status || 'waiting').toLowerCase() === 'waiting') && !openTunnelIds.has(tunnel.id)) {
     openTunnels.unshift({
       ...tunnel,
-      sourceName: tunnelPreset?.sourceName,
       fromCurrency: tunnelPreset?.fromCurrency,
       fromNetwork: tunnelPreset?.fromNetwork,
       fromAmount: tunnelPreset?.fromAmount,
@@ -453,10 +451,27 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     }
   }, [user.uid])
 
-  async function refreshPresets() {
+  async function refreshPresets({ openNewOnExisting = false } = {}) {
     const saved = await listPresets(user.uid)
     setPresets(saved)
+    setPresetsLoadError(false)
     if (!saved.some((preset) => preset.id === selectedId)) setSelectedId(saved[0]?.id ?? '')
+    if (openNewOnExisting && saved.length > 0) {
+      setForm(emptyPreset)
+      setShowNewPreset(true)
+    }
+  }
+
+  async function retryPresetLoad() {
+    setPresetsLoading(true)
+    setPresetsLoadError(false)
+    try {
+      await refreshPresets({ openNewOnExisting: startWithNewPreset })
+    } catch {
+      setPresetsLoadError(true)
+    } finally {
+      setPresetsLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -464,7 +479,9 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setCurrenciesLoading(true)
     setCurrencyError('')
     setAddressBookError('')
-    refreshPresets().catch(() => setError('Saved routes could not be loaded. Check your Firebase setup.'))
+    refreshPresets({ openNewOnExisting: startWithNewPreset })
+      .catch(() => setPresetsLoadError(true))
+      .finally(() => setPresetsLoading(false))
     listAddressBookEntries(user.uid)
       .then((entries) => { if (active) setAddressBookEntries(entries) })
       .catch(() => { if (active) setAddressBookError('Saved addresses could not be loaded.') })
@@ -620,15 +637,11 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   function beginEditPreset() {
     if (!selectedPreset) return
     setForm({
-      sourceName: selectedPreset.sourceName ?? '',
       fromCurrency: selectedPreset.fromCurrency ?? emptyPreset.fromCurrency,
       fromNetwork: selectedPreset.fromNetwork ?? emptyPreset.fromNetwork,
       toCurrency: selectedPreset.toCurrency ?? emptyPreset.toCurrency,
       toNetwork: selectedPreset.toNetwork ?? emptyPreset.toNetwork,
       fromAmount: selectedPreset.fromAmount ?? '',
-      destinationName: typeof selectedPreset.sourceName === 'undefined'
-        ? ''
-        : selectedPreset.destinationName ?? '',
       destinationAddress: selectedPreset.destinationAddress ?? '',
       destinationExtraId: selectedPreset.destinationExtraId ?? '',
       refundAddress: selectedPreset.refundAddress ?? '',
@@ -682,8 +695,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       const preset = {
         ...form,
         name: getPresetName(form),
-        sourceName: form.sourceName.trim(),
-        destinationName: form.destinationName.trim(),
         destinationAddress: form.destinationAddress.trim(),
         fromAmount: form.fromAmount.trim(),
         destinationExtraId: form.destinationExtraId.trim(),
@@ -813,7 +824,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
           status: created.status || 'waiting',
           payinAddress: created.payinAddress,
           payinExtraId: created.payinExtraId,
-          sourceName: selectedPreset.sourceName,
           fromCurrency: selectedPreset.fromCurrency,
           fromNetwork: selectedPreset.fromNetwork,
           fromAmount: selectedPreset.fromAmount,
@@ -853,7 +863,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
             <div><p className="eyebrow">YOUR WORKSPACE</p><h2>Saved Routes</h2></div>
             <button className="icon-button" aria-label="Create route" title="Create route" onClick={toggleNewPreset} type="button">+</button>
           </div>
-          {presets.length === 0 && <p className="empty-routes">No routes saved yet.</p>}
+          {presetsLoading && <p className="empty-routes" role="status">Loading saved routes…</p>}
+          {!presetsLoading && !presetsLoadError && presets.length === 0 && <p className="empty-routes">No routes saved yet.</p>}
           <nav className="route-list" aria-label="Saved routes">
             {presets.map((preset) => (
               <button
@@ -895,7 +906,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
             <section className="panel new-route-panel">
               <div className="panel-heading"><div><p className="eyebrow">{editingPresetId ? 'EDIT PRESET' : 'NEW PRESET'}</p><h2>{editingPresetId ? 'Edit Saved Route' : 'Route Details'}</h2></div></div>
               <form className="preset-form" onSubmit={savePreset}>
-                <label className="field-wide">Source wallet or app (optional)<input name="sourceName" value={form.sourceName} onChange={updateForm} placeholder="For your reference" maxLength="48" /></label>
                 {currenciesLoading && <p className="field-note field-wide" role="status">Loading ChangeNOW assets…</p>}
                 {currencyError && <div className="notice notice-error field-wide" role="alert">{currencyError}<button className="button button-quiet" onClick={() => setCurrencyReloadKey((key) => key + 1)} type="button">Reload assets</button></div>}
                 <label className="field-wide">Send crypto from
@@ -971,7 +981,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   {minimumStatus === 'error' && 'The current minimum is unavailable. ChangeNOW will check it when you request a quote. '}
                   Enter the amount you plan to send to ChangeNOW. The estimated receive amount appears after you request a quote.
                 </p>
-                <label className="field-wide">Destination wallet or app (optional)<input name="destinationName" value={form.destinationName} onChange={updateForm} placeholder="For your reference" maxLength="48" /></label>
                 <label className="field-wide">Destination address<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder="Address on the selected receive network" required /></label>
                 {selectedToCurrency?.hasExternalId && <label className="field-wide">Destination memo or tag<input name="destinationExtraId" value={form.destinationExtraId} onChange={updateForm} autoComplete="off" placeholder="Required by this asset" required /></label>}
                 <div className="address-tools field-wide">
@@ -997,7 +1006,20 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
             </section>
           )}
 
-          {!selectedPreset && !showNewPreset && (
+          {presetsLoading && !showNewPreset && (
+            <section className="preset-loading" role="status">Loading saved routes…</section>
+          )}
+
+          {!presetsLoading && presetsLoadError && !showNewPreset && (
+            <section className="empty-state">
+              <p className="eyebrow">ROUTES UNAVAILABLE</p>
+              <h2>Saved routes couldn’t load</h2>
+              <p>Check your connection, then try loading your routes again.</p>
+              <button className="button button-primary" disabled={presetsLoading} onClick={retryPresetLoad} type="button">Try again</button>
+            </section>
+          )}
+
+          {!presetsLoading && !presetsLoadError && !selectedPreset && !showNewPreset && (
             <section className="empty-state"><div className="empty-glyph" aria-hidden="true">↗</div><p className="eyebrow">READY WHEN YOU ARE</p><h2>Create Your First Route</h2><p>Save your swap details and destination addresses for easy reuse.</p><button className="button button-primary" onClick={toggleNewPreset} type="button">Create a route <span aria-hidden="true">+</span></button></section>
           )}
 

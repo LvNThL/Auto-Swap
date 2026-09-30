@@ -11,6 +11,16 @@ import {
 } from 'firebase/auth'
 import { auth } from '../firebase.js'
 
+const SAVED_USERNAME_KEY = 'autoswap-saved-username'
+
+function getSavedUsername() {
+  try {
+    return window.localStorage.getItem(SAVED_USERNAME_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
 function AuthHeader({ user, installPrompt, isInstalled, isIos, onInstallPromptConsumed, onThemeChange, themePreference, activePage, onNavigate }) {
   return (
     <header className="topbar">
@@ -35,8 +45,9 @@ function AuthHeader({ user, installPrompt, isInstalled, isIos, onInstallPromptCo
 
 export default function Auth({ verificationUser, themePreference, onThemeChange, installPrompt, isInstalled, isIos, onInstallPromptConsumed, activePage, onNavigate, initialMode = 'login' }) {
   const [mode, setMode] = useState(initialMode)
-  const [email, setEmail] = useState('')
+  const [email, setEmail] = useState(getSavedUsername)
   const [password, setPassword] = useState('')
+  const [saveUsername, setSaveUsername] = useState(() => Boolean(getSavedUsername()))
   const [rememberMe, setRememberMe] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -45,6 +56,14 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
   useEffect(() => {
     setMode(initialMode)
   }, [initialMode])
+
+  useEffect(() => {
+    if (mode !== 'login') return
+    try {
+      if (saveUsername && email.trim()) window.localStorage.setItem(SAVED_USERNAME_KEY, email.trim())
+      else if (!saveUsername) window.localStorage.removeItem(SAVED_USERNAME_KEY)
+    } catch {}
+  }, [email, mode, saveUsername])
 
   useEffect(() => {
     if (!verificationUser) return
@@ -168,10 +187,16 @@ export default function Auth({ verificationUser, themePreference, onThemeChange,
               />
             </label>
             {mode === 'login' && (
-              <label className="remember-option">
-                <input checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} type="checkbox" />
-                <span>Remember me on this device</span>
-              </label>
+              <>
+                <label className="remember-option">
+                  <input checked={saveUsername} onChange={(event) => setSaveUsername(event.target.checked)} type="checkbox" />
+                  <span>Save username</span>
+                </label>
+                <label className="remember-option">
+                  <input checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} type="checkbox" />
+                  <span>Remember me on this device</span>
+                </label>
+              </>
             )}
             {message && <p className="form-message" role="status">{message}</p>}
             <button className="button button-primary" disabled={busy} type="submit">

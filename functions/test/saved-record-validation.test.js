@@ -10,13 +10,11 @@ const {
 
 const validPreset = {
   name: 'FIL to USDT',
-  sourceName: '  Source wallet  ',
   fromCurrency: 'FIL',
   fromNetwork: 'FIL',
   toCurrency: 'USDT',
   toNetwork: 'BSC',
   fromAmount: '10',
-  destinationName: '',
   destinationAddress: '0xabc123',
   destinationExtraId: '',
   refundAddress: '',
@@ -42,7 +40,6 @@ test('trims preset text and canonicalizes currency/network identifiers', () => {
   assert.deepEqual(validatePreset(validPreset), {
     ...validPreset,
     name: 'FIL (FIL) to USDT (BSC)',
-    sourceName: 'Source wallet',
     fromCurrency: 'fil',
     fromNetwork: 'fil',
     toCurrency: 'usdt',
@@ -64,6 +61,8 @@ test('generates preset names from the selected assets and ignores custom labels'
 
 test('rejects preset fields that are not part of the stored schema', () => {
   assert.throws(() => validatePreset({ ...validPreset, arbitrary: 'payload' }), /unsupported fields/)
+  assert.throws(() => validatePreset({ ...validPreset, sourceName: 'My wallet app' }), /unsupported fields/)
+  assert.throws(() => validatePreset({ ...validPreset, destinationName: 'My destination app' }), /unsupported fields/)
 })
 
 test('rejects invalid, zero, and non-decimal preset amounts', () => {

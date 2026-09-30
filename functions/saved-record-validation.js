@@ -4,13 +4,11 @@ const MAX_DAILY_SAVED_RECORD_WRITES = 250
 
 const presetSchema = {
   name: { maxLength: 138 },
-  sourceName: { maxLength: 48 },
   fromCurrency: { maxLength: 32, required: true, lowercase: true },
   fromNetwork: { maxLength: 32, required: true, lowercase: true },
   toCurrency: { maxLength: 32, required: true, lowercase: true },
   toNetwork: { maxLength: 32, required: true, lowercase: true },
   fromAmount: { maxLength: 48, required: true },
-  destinationName: { maxLength: 48 },
   destinationAddress: { maxLength: 256, required: true },
   destinationExtraId: { maxLength: 256 },
   refundAddress: { maxLength: 256 },
