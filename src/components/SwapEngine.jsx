@@ -251,6 +251,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [showNewPreset, setShowNewPreset] = useState(() => initialPresetView === NEW_PRESET_VIEW)
   const [routeListScrolling, setRouteListScrolling] = useState(false)
   const routeListScrollTimeout = useRef(null)
+  const fromAssetSelectRef = useRef(null)
+  const toAssetSelectRef = useRef(null)
   const [editingPresetId, setEditingPresetId] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -722,6 +724,15 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setError('')
   }
 
+  function handleAssetSelectKeyDown(side, event) {
+    if (event.key !== 'Enter' || event.keyCode !== 229 || event.target.tagName !== 'INPUT') return
+    event.preventDefault()
+    event.stopPropagation()
+    const selectRef = side === 'from' ? fromAssetSelectRef : toAssetSelectRef
+    const focusedCurrency = selectRef.current?.state?.focusedOption
+    if (focusedCurrency) updateSelectedCurrency(side, focusedCurrency)
+  }
+
   function loadAddress(target, entryId) {
     const entry = addressBookEntries.find((savedEntry) => savedEntry.id === entryId)
     if (!entry) return
@@ -1099,6 +1110,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     className="asset-select"
                     classNamePrefix="asset-select"
                     inputId="send-asset-select"
+                    onKeyDown={(event) => handleAssetSelectKeyDown('from', event)}
+                    ref={fromAssetSelectRef}
                     inputValue={fromSearch}
                     isDisabled={currenciesLoading || fromCurrencies.length === 0}
                     isSearchable
@@ -1130,6 +1143,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     className="asset-select"
                     classNamePrefix="asset-select"
                     inputId="receive-asset-select"
+                    onKeyDown={(event) => handleAssetSelectKeyDown('to', event)}
+                    ref={toAssetSelectRef}
                     inputValue={toSearch}
                     isDisabled={currenciesLoading || toCurrencies.length === 0}
                     isSearchable
