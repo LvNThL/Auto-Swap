@@ -603,7 +603,7 @@ exports.getSwapQuote = onCall(
 
     const quotedAt = Date.now()
     const rateId = typeof estimate.rateId === 'string' && estimate.rateId.trim() ? estimate.rateId.trim() : null
-    const validUntil = exchange.flow === 'fixed-rate' ? estimate.validUntil ?? null : null
+    const validUntil = estimate.validUntil ?? null
     if (exchange.flow === 'fixed-rate' && (!rateId || validUntil == null)) {
       throw new HttpsError('unavailable', 'ChangeNOW did not return a valid fixed-rate quote. No deposit address was created.')
     }

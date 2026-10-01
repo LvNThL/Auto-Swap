@@ -49,7 +49,7 @@ function getQuoteExpiresAt(quotedAt, ttlMs, providerValidUntil) {
     ? (providerValidUntil < 1e12 ? providerValidUntil * 1000 : providerValidUntil)
     : Date.parse(providerValidUntil)
   if (!Number.isFinite(providerExpiry)) throw new TypeError('ChangeNOW returned an invalid quote expiry.')
-  return Math.min(localExpiry, providerExpiry)
+  return providerExpiry
 }
 
 module.exports = { normalizeExchangeFlow, quoteMatchesExchange, quoteMatchesPreset, quoteExpired, getQuoteExpiresAt }

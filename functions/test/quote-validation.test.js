@@ -73,9 +73,10 @@ test('expires quotes at and after their expiry timestamp', () => {
   assert.equal(quoteExpired(undefined, 0), true)
 })
 
-test('caps local quote expiry at the provider validity time', () => {
+test('uses provider quote validity when supplied and falls back to the local expiry otherwise', () => {
   assert.equal(getQuoteExpiresAt(1000, 600000), 601000)
   assert.equal(getQuoteExpiresAt(1000, 600000, '1970-01-01T00:04:00.000Z'), 240000)
+  assert.equal(getQuoteExpiresAt(1000, 600000, '1970-01-01T00:12:00.000Z'), 720000)
   assert.equal(getQuoteExpiresAt(1000, 600000, 240), 240000)
   assert.throws(() => getQuoteExpiresAt(1000, 600000, 'invalid'), /invalid quote expiry/)
 })
