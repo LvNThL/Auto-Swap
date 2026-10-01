@@ -9,7 +9,7 @@ const EXCHANGE_FIELDS = [
   'refundAddress',
   'refundExtraId',
 ]
-const PRESET_MATCH_FIELDS = EXCHANGE_FIELDS.filter((field) => field !== 'toExtraId' && field !== 'refundExtraId')
+const PRESET_MATCH_FIELDS = [...EXCHANGE_FIELDS.filter((field) => field !== 'toExtraId' && field !== 'refundExtraId'), 'flow']
 
 function normalizeExchangeFlow(flow) {
   if (flow == null || flow === '') return 'standard'
@@ -29,12 +29,15 @@ function quoteMatchesPreset(preset, exchange) {
     toCurrency: preset?.toCurrency,
     toNetwork: preset?.toNetwork,
     fromAmount: preset?.fromAmount,
+    flow: preset?.flow ?? 'standard',
     toAddress: preset?.destinationAddress,
     toExtraId: preset?.destinationExtraId ?? '',
     refundAddress: preset?.refundAddress ?? '',
     refundExtraId: preset?.refundExtraId ?? '',
   }
-  return PRESET_MATCH_FIELDS.every((field) => presetExchange[field] === exchange[field])
+  return PRESET_MATCH_FIELDS.every((field) => presetExchange[field] === (
+    field === 'flow' ? exchange?.flow ?? 'standard' : exchange[field]
+  ))
 }
 
 function quoteExpired(expiresAt, now = Date.now()) {

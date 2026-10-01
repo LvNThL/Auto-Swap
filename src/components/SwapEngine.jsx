@@ -17,6 +17,7 @@ const emptyPreset = {
   toCurrency: 'eth',
   toNetwork: 'eth',
   fromAmount: '',
+  flow: 'standard',
   destinationAddress: '',
   destinationExtraId: '',
   refundAddress: '',
@@ -238,6 +239,8 @@ function getChangeNowExchangeUrl(exchangeId) {
 function SwapHistoryItem({ swap }) {
   const status = String(swap.status || 'unknown').toLowerCase()
   const isTerminal = terminalSwapStatuses.has(status)
+  const isActive = ['waiting', 'confirming', 'exchanging', 'sending'].includes(status)
+  const progress = isActive ? getSwapProgress(status, swap.cancellationReason) : null
 
   return (
     <article className="history-item">
@@ -258,6 +261,16 @@ function SwapHistoryItem({ swap }) {
       <div className="history-status-controls">
         <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status, swap.cancellationReason)}</span>
       </div>
+      {progress && <div className="history-progress" aria-label="Active swap progress">
+        <span className="history-progress-label" role="status" aria-label={`${progress.label}. ${progress.detail}`} title={progress.detail}>{progress.label}</span>
+        <ol className="history-progress-steps" aria-label="Swap progress">
+          {swapProgressSteps.map((step, index) => {
+            const complete = index < progress.step
+            const current = index === progress.step
+            return <li className={`${complete ? 'is-complete' : ''} ${current ? 'is-current' : ''}`} aria-label={step} aria-current={current ? 'step' : undefined} key={step}><span aria-hidden="true">{complete ? '✓' : index + 1}</span></li>
+          })}
+        </ol>
+      </div>}
     </article>
   )
 }
@@ -269,10 +282,10 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [presetsLoadError, setPresetsLoadError] = useState(false)
   const [currencies, setCurrencies] = useState([])
   const [currenciesLoading, setCurrenciesLoading] = useState(true)
-  const [rateFlow, setRateFlow] = useState('standard')
   const [currencyError, setCurrencyError] = useState('')
   const [currencyReloadKey, setCurrencyReloadKey] = useState(0)
   const [minimumAmount, setMinimumAmount] = useState('')
+  const [maximumAmount, setMaximumAmount] = useState('')
   const [minimumStatus, setMinimumStatus] = useState('idle')
   const [addressBookEntries, setAddressBookEntries] = useState([])
   const [addressBookDialog, setAddressBookDialog] = useState('')
@@ -321,8 +334,8 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   }
 
   function changeRateFlow(flow) {
-    if (flow === rateFlow || busy) return
-    setRateFlow(flow)
+    if (flow === form.flow || busy) return
+    setForm((current) => ({ ...current, flow }))
     setQuote(null)
     setConfirming(false)
     setError('')
@@ -384,7 +397,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const selectedPresetToCurrency = selectedPreset
     ? findCurrency(currencies, selectedPreset.toCurrency, selectedPreset.toNetwork)
     : null
-  const selectedPresetRefundExtraIdRequired = Boolean(selectedPreset?.refundAddress && selectedPresetFromCurrency?.requiresExtraId)
+  const currencyFlow = showNewPreset ? form.flow : selectedPreset?.flow ?? 'standard'
   const waitingTunnelSwaps = pendingSwaps.filter((swap) => String(swap.status || 'waiting').toLowerCase() === 'waiting')
   const waitingTunnelCount = waitingTunnelSwaps.length
   const tunnelSlotStates = Array.from({ length: MAX_WAITING_TUNNELS }, (_, index) => {
@@ -735,8 +748,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
   useEffect(() => {
     let active = true
-    setCurrenciesLoading(true)
-    setCurrencyError('')
     setAddressBookError('')
     refreshPresets({ openNewOnExisting: startWithNewPreset })
       .catch(() => setPresetsLoadError(true))
@@ -745,26 +756,21 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       .then((entries) => { if (active) setAddressBookEntries(entries) })
       .catch(() => { if (active) setAddressBookError('Saved addresses could not be loaded.') })
 
+    return () => { active = false }
+  }, [user.uid, startWithNewPreset])
+
+  useEffect(() => {
+    let active = true
+    setCurrenciesLoading(true)
+    setCurrencies([])
+    setCurrencyError('')
     const getCurrencies = httpsCallable(functions, 'getSwapCurrencies')
-    getCurrencies({})
+    getCurrencies({ flow: currencyFlow })
       .then(({ data }) => {
         if (!active) return
         const availableCurrencies = data.currencies ?? []
         setCurrencies(availableCurrencies)
         setCurrencyError('')
-        setForm((current) => {
-          const hasCurrency = (ticker, network) => availableCurrencies.some((currency) =>
-            currency.ticker === ticker && currency.network === network)
-          const defaultFrom = availableCurrencies.find((currency) => currency.ticker === 'btc' && currency.network === 'btc')
-          const defaultTo = availableCurrencies.find((currency) => currency.ticker === 'eth' && currency.network === 'eth')
-          return {
-            ...current,
-            fromCurrency: hasCurrency(current.fromCurrency, current.fromNetwork) ? current.fromCurrency : defaultFrom?.ticker ?? '',
-            fromNetwork: hasCurrency(current.fromCurrency, current.fromNetwork) ? current.fromNetwork : defaultFrom?.network ?? '',
-            toCurrency: hasCurrency(current.toCurrency, current.toNetwork) ? current.toCurrency : defaultTo?.ticker ?? '',
-            toNetwork: hasCurrency(current.toCurrency, current.toNetwork) ? current.toNetwork : defaultTo?.network ?? '',
-          }
-        })
       })
       .catch((catalogError) => {
         if (active) setCurrencyError(getErrorMessage(catalogError))
@@ -774,17 +780,19 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       })
 
     return () => { active = false }
-  }, [user.uid, currencyReloadKey])
+  }, [currencyFlow, currencyReloadKey, user.uid])
 
   useEffect(() => {
     if (!showNewPreset || currenciesLoading || !selectedFromCurrency || !selectedToCurrency) {
       setMinimumAmount('')
+      setMaximumAmount('')
       setMinimumStatus('idle')
       return undefined
     }
 
     let active = true
     setMinimumAmount('')
+    setMaximumAmount('')
     setMinimumStatus('loading')
     const timeout = window.setTimeout(() => {
       const getMinimum = httpsCallable(functions, 'getSwapMinimum')
@@ -793,15 +801,18 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         fromNetwork: form.fromNetwork,
         toCurrency: form.toCurrency,
         toNetwork: form.toNetwork,
+        flow: form.flow,
       })
         .then(({ data }) => {
           if (!active) return
           setMinimumAmount(data.minimumAmount)
+          setMaximumAmount(data.maximumAmount ?? '')
           setMinimumStatus('ready')
         })
         .catch(() => {
           if (!active) return
           setMinimumAmount('')
+          setMaximumAmount('')
           setMinimumStatus('error')
         })
     }, 300)
@@ -810,7 +821,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       active = false
       window.clearTimeout(timeout)
     }
-  }, [currenciesLoading, form.fromCurrency, form.fromNetwork, form.toCurrency, form.toNetwork, selectedFromCurrency, selectedToCurrency, showNewPreset])
+  }, [currenciesLoading, form.flow, form.fromCurrency, form.fromNetwork, form.toCurrency, form.toNetwork, selectedFromCurrency, selectedToCurrency, showNewPreset])
 
   function updateForm(event) {
     const { name, value } = event.target
@@ -934,6 +945,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       toCurrency: selectedPreset.toCurrency ?? emptyPreset.toCurrency,
       toNetwork: selectedPreset.toNetwork ?? emptyPreset.toNetwork,
       fromAmount: selectedPreset.fromAmount ?? '',
+      flow: selectedPreset.flow ?? 'standard',
       destinationAddress: selectedPreset.destinationAddress ?? '',
       destinationExtraId: '',
       refundAddress: selectedPreset.refundAddress ?? '',
@@ -1067,14 +1079,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       setError('Assets are still loading. Try again shortly.')
       return
     }
-    if (selectedPresetToCurrency.requiresExtraId && !swapDestinationExtraId.trim()) {
-      setError(`Enter the current ${selectedPreset.toCurrency.toUpperCase()} memo or tag for ${selectedPreset.toNetwork.toUpperCase()} to continue.`)
-      return
-    }
-    if (selectedPresetRefundExtraIdRequired && !swapRefundExtraId.trim()) {
-      setError(`Enter the current refund memo or tag for ${selectedPreset.fromCurrency.toUpperCase()} on ${selectedPreset.fromNetwork.toUpperCase()}.`)
-      return
-    }
     setBusy(true)
     setError('')
     setNotice('Checking pair and live estimate…')
@@ -1092,7 +1096,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         toExtraId: swapDestinationExtraId.trim(),
         refundAddress: selectedPreset.refundAddress,
         refundExtraId: selectedPreset.refundAddress ? swapRefundExtraId.trim() : '',
-        flow: rateFlow,
+        flow: selectedPreset.flow ?? 'standard',
         presetId: selectedPreset.id,
       })
       setClockNow(Date.now())
@@ -1127,7 +1131,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     setTunnelPreset(null)
 
     try {
-      const flow = quote.flow ?? rateFlow
+      const flow = quote.flow ?? selectedPreset.flow ?? 'standard'
       const created = await createTunnel(selectedPreset, quote.quoteId, flow)
       if (!created.payinAddress) throw new Error('ChangeNOW did not return a deposit address. The exchange may not support this route.')
       const tunnelAccessExpiresAt = created.accessExpiresAt ?? Date.now() + tunnelAccessTtlMs(flow)
@@ -1304,20 +1308,33 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     styles={assetSelectStyles}
                   />
                 </label>
+                {!currenciesLoading && form.fromCurrency && !selectedFromCurrency && <p className="field-note field-wide">This send asset isn't available for {form.flow === 'fixed-rate' ? 'fixed-rate' : 'standard'} swaps. Choose another asset.</p>}
+                {!currenciesLoading && form.toCurrency && !selectedToCurrency && <p className="field-note field-wide">This receive asset isn't available for {form.flow === 'fixed-rate' ? 'fixed-rate' : 'standard'} swaps. Choose another asset.</p>}
+                <div className="rate-mode-setting field-wide">
+                  <span className="rate-mode-label-wrap">
+                    <span className="rate-mode-label">Exchange rate</span>
+                    <button aria-describedby="rate-mode-tooltip" aria-label="Exchange rate information" className="rate-mode-help" type="button">?</button>
+                    <span className="rate-mode-tooltip" id="rate-mode-tooltip" role="tooltip">{form.flow === 'fixed-rate' ? 'Locks the receive amount when quoted. Send your deposit within 10 minutes of opening the tunnel.' : 'The receive amount is an estimate and may change before the exchange completes.'}</span>
+                  </span>
+                  <div className="rate-mode-control" role="group" aria-label="Exchange rate mode">
+                    <button aria-pressed={form.flow === 'standard'} className={form.flow === 'standard' ? 'rate-mode-selected' : ''} disabled={busy} onClick={() => changeRateFlow('standard')} type="button">Standard</button>
+                    <button aria-pressed={form.flow === 'fixed-rate'} className={form.flow === 'fixed-rate' ? 'rate-mode-selected' : ''} disabled={busy} onClick={() => changeRateFlow('fixed-rate')} type="button">Fixed rate</button>
+                  </div>
+                </div>
                 <div className="flow-destination field-wide">
                   <span>RECEIVING AT</span>
                   <strong>{formDestinationWalletName}</strong>
                   <p>Send the selected asset and network to ChangeNOW. It sends the exchanged asset to this destination.</p>
                 </div>
                 <label>Amount to send ({form.fromCurrency.toUpperCase()})<input aria-describedby="minimum-send-note" name="fromAmount" inputMode="decimal" value={form.fromAmount} onChange={updateForm} placeholder="0.05" required /></label>
-                <p className="field-note field-wide" id="minimum-send-note" role="status">
-                  {minimumStatus === 'loading' && 'Checking the minimum for this pair… '}
-                  {minimumStatus === 'ready' && `Minimum: ${minimumAmount} ${form.fromCurrency.toUpperCase()}. `}
-                  {minimumStatus === 'error' && 'Minimum unavailable; ChangeNOW will check when you request a quote. '}
-                  Enter the send amount. The estimate appears with your quote.
-                </p>
+                <div className="field-note field-wide amount-range-note" id="minimum-send-note" role="status">
+                  {minimumStatus === 'loading' && `Checking live ${form.flow === 'fixed-rate' ? 'fixed-rate' : 'standard'} limits…`}
+                  {minimumStatus === 'ready' && <><span>Live {form.flow === 'fixed-rate' ? 'fixed-rate' : 'standard'} limits</span><div className="amount-range-values"><span><strong>Minimum</strong> {minimumAmount} {form.fromCurrency.toUpperCase()}</span><span><strong>Maximum</strong> {maximumAmount ? `${maximumAmount} ${form.fromCurrency.toUpperCase()}` : 'Not reported by ChangeNOW'}</span></div></>}
+                  {minimumStatus === 'error' && 'Live limits unavailable. ChangeNOW will validate the amount when you request a quote.'}
+                  {minimumStatus === 'idle' && 'Live minimum and maximum appear when both assets are available.'}
+                </div>
                 <label className="field-wide">Destination address<input name="destinationAddress" value={form.destinationAddress} onChange={updateForm} autoComplete="off" placeholder="Address on the selected receive network" required /></label>
-                {(selectedToCurrency?.requiresExtraId || selectedToCurrency?.supportsExtraId) && <label className="field-wide preset-memo-field">Destination memo or tag{selectedToCurrency.requiresExtraId ? ' (Required for each swap)' : ' (Optional)'}<input autoComplete="off" name="destinationExtraId" onChange={updateForm} placeholder={selectedToCurrency.requiresExtraId ? 'Enter the current destination memo or tag' : 'Enter an optional destination memo or tag'} value={form.destinationExtraId} /><small>{selectedToCurrency.requiresExtraId ? 'A value is required before requesting a quote.' : 'Only enter one if ChangeNOW or the receiving wallet provides it.'} This value applies to the swap you open now and will not be saved with the preset.</small></label>}
+                {(selectedToCurrency?.requiresExtraId || selectedToCurrency?.supportsExtraId) && <label className="field-wide preset-memo-field">Destination memo or tag (Optional)<input autoComplete="off" name="destinationExtraId" onChange={updateForm} placeholder="Enter only if your receiving wallet requires one" value={form.destinationExtraId} /><small>Check your receiving wallet's instructions. ChangeNOW may still reject a swap if that destination requires a value. This value applies to the next swap only.</small></label>}
                 <div className="address-tools field-wide">
                   <select aria-label="Load a saved destination address" value="" onChange={(event) => loadAddress('destination', event.target.value)}>
                     <option value="">Load a saved destination address…</option>
@@ -1327,7 +1344,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   <button className="button button-quiet" onClick={() => setAddressBookDialog('manage-destination')} type="button">Manage address book</button>
                 </div>
                 <label className="field-wide">Refund address <span className="optional-label">Optional. Used only if the exchange refunds the swap.</span><input name="refundAddress" value={form.refundAddress} onChange={updateForm} autoComplete="off" placeholder="Crypto address on the send network" /></label>
-                {form.refundAddress && (selectedFromCurrency?.requiresExtraId || selectedFromCurrency?.supportsExtraId) && <label className="field-wide preset-memo-field">Refund memo or tag{selectedFromCurrency.requiresExtraId ? ' (Required for this refund address)' : ' (Optional)'}<input autoComplete="off" name="refundExtraId" onChange={updateForm} placeholder={selectedFromCurrency.requiresExtraId ? 'Enter the current refund memo or tag' : 'Enter an optional refund memo or tag'} value={form.refundExtraId} /><small>Used only with this refund address for the swap you open now. This value will not be saved with the preset.</small></label>}
+                {form.refundAddress && (selectedFromCurrency?.requiresExtraId || selectedFromCurrency?.supportsExtraId) && <label className="field-wide preset-memo-field">Refund memo or tag (Optional)<input autoComplete="off" name="refundExtraId" onChange={updateForm} placeholder="Enter only if your refund wallet requires one" value={form.refundExtraId} /><small>Use the requirement for the refund address and network. This value applies to the next swap only.</small></label>}
                 <div className="address-tools field-wide">
                   <select aria-label="Load a saved refund address" value="" onChange={(event) => loadAddress('refund', event.target.value)}>
                     <option value="">Load a saved refund address…</option>
@@ -1381,34 +1398,22 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   </div>
                   <span className="panel-index">{String(selectedRouteNumber).padStart(2, '0')} / {String(presets.length).padStart(2, '0')} ROUTES</span>
                 </div>
-                <div className="rate-mode-setting">
-                  <span className="rate-mode-label-wrap">
-                    <span className="rate-mode-label">Exchange rate</span>
-                    <button aria-describedby="rate-mode-tooltip" aria-label="Exchange rate information" className="rate-mode-help" type="button">?
-                    </button>
-                    <span className="rate-mode-tooltip" id="rate-mode-tooltip" role="tooltip">{rateFlow === 'fixed-rate' ? 'Locks the receive amount when quoted. Send your deposit within 10 minutes of opening the tunnel.' : 'The receive amount is an estimate and may change before the exchange completes.'}</span>
-                  </span>
-                  <div className="rate-mode-control" role="group" aria-label="Exchange rate mode">
-                    <button aria-pressed={rateFlow === 'standard'} className={rateFlow === 'standard' ? 'rate-mode-selected' : ''} disabled={busy} onClick={() => changeRateFlow('standard')} type="button">Standard</button>
-                    <button aria-pressed={rateFlow === 'fixed-rate'} className={rateFlow === 'fixed-rate' ? 'rate-mode-selected' : ''} disabled={busy} onClick={() => changeRateFlow('fixed-rate')} type="button">Fixed rate</button>
-                  </div>
-                </div>
-                {selectedPresetToCurrency?.requiresExtraId && <div className="notice notice-warning preset-extra-id-warning" role="status">Enter the current destination memo or tag. It isn't saved with the preset.</div>}
                 {(selectedPresetToCurrency?.requiresExtraId || selectedPresetToCurrency?.supportsExtraId || (selectedPreset?.refundAddress && (selectedPresetFromCurrency?.requiresExtraId || selectedPresetFromCurrency?.supportsExtraId))) && <div className="preset-extra-id-fields">
                   {(selectedPresetToCurrency?.requiresExtraId || selectedPresetToCurrency?.supportsExtraId) && (
-                    <label>Destination memo or tag{selectedPresetToCurrency.requiresExtraId ? ' (Required)' : ' (Optional)'}
-                      <input autoComplete="off" onChange={(event) => { setSwapDestinationExtraId(event.target.value); setQuote(null); setConfirming(false); setError('') }} placeholder={selectedPresetToCurrency.requiresExtraId ? 'Enter the current required memo or tag' : 'Enter a memo or tag if required by this deposit'} required={selectedPresetToCurrency.requiresExtraId} value={swapDestinationExtraId} />
-                      <small>Current value only; not saved with the preset.</small>
+                    <label>Destination memo or tag (Optional)
+                      <input autoComplete="off" onChange={(event) => { setSwapDestinationExtraId(event.target.value); setQuote(null); setConfirming(false); setError('') }} placeholder="Enter only if your receiving wallet requires one" value={swapDestinationExtraId} />
+                      <small>Check the receiving wallet's instructions. A provider may still reject a missing value when the destination requires one.</small>
                     </label>
                   )}
                   {selectedPreset?.refundAddress && (selectedPresetFromCurrency?.requiresExtraId || selectedPresetFromCurrency?.supportsExtraId) && (
-                    <label>Refund memo or tag{selectedPresetRefundExtraIdRequired ? ' (Required)' : ' (Optional)'}
-                      <input autoComplete="off" onChange={(event) => { setSwapRefundExtraId(event.target.value); setQuote(null); setConfirming(false); setError('') }} placeholder={selectedPresetRefundExtraIdRequired ? 'Enter the current required refund memo or tag' : 'Enter a refund memo or tag if required'} required={selectedPresetRefundExtraIdRequired} value={swapRefundExtraId} />
-                      <small>Used only for refunds; not saved with the preset.</small>
+                    <label>Refund memo or tag (Optional)
+                      <input autoComplete="off" onChange={(event) => { setSwapRefundExtraId(event.target.value); setQuote(null); setConfirming(false); setError('') }} placeholder="Enter only if your refund wallet requires one" value={swapRefundExtraId} />
+                      <small>Check the refund wallet's instructions; requirements may differ from the destination wallet.</small>
                     </label>
                   )}
                 </div>}
                 <div className="detail-grid">
+                  <div><span>Exchange rate</span><strong>{selectedPreset.flow === 'fixed-rate' ? 'Fixed rate' : 'Standard rate'}</strong></div>
                   <div><span>Send amount</span><strong>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()}</strong></div>
                   <div><span>Deposit network</span><strong>{selectedPreset.fromNetwork?.toUpperCase()}</strong></div>
                   <div><span>Destination network</span><strong>{selectedPreset.toNetwork?.toUpperCase()}</strong></div>
@@ -1463,30 +1468,6 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                             {(openTunnel.transactionHash || openTunnel.payinHash) && <div className="transaction-hash"><span>Wallet transaction</span><code>{openTunnel.transactionHash ?? openTunnel.payinHash}</code></div>}
                           </>
                         )}
-                        {(() => {
-                          const progress = getSwapProgress(openTunnel.status, openTunnel.cancellationReason)
-                          return (
-                            <section className={`swap-progress ${progress.step < 0 ? 'swap-progress-alert' : ''}`} aria-label="Swap status">
-                              <div className="swap-progress-current" role="status" aria-live="polite">
-                                <span className="swap-progress-led" aria-hidden="true" />
-                                <div><strong>{progress.label}</strong><p>{progress.detail}</p></div>
-                              </div>
-                              {progress.step >= 0 && (
-                                <ol className="swap-progress-steps" aria-label="Swap progress">
-                                  {swapProgressSteps.map((step, index) => {
-                                    const complete = index < progress.step || progress.step === swapProgressSteps.length - 1
-                                    const current = index === progress.step && !complete
-                                    return (
-                                      <li className={`${complete ? 'is-complete' : ''} ${current ? 'is-current' : ''}`} aria-current={current ? 'step' : undefined} key={step}>
-                                        <span>{complete ? '✓' : index + 1}</span><small>{step}</small>
-                                      </li>
-                                    )
-                                  })}
-                                </ol>
-                              )}
-                            </section>
-                          )
-                        })()}
                         {(openTunnel.id || canCancelTunnel) && (
                           <div className="tunnel-footer">
                             <div className="tunnel-footer-main">
@@ -1575,7 +1556,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                 <p className="muted">{addressDraft.ticker.toUpperCase()} on {addressDraft.network.toUpperCase()} · {addressDraft.purpose === 'destination' ? 'Destination' : 'Refund'} address</p>
                 <label>Address label<input autoFocus maxLength="48" onChange={(event) => setAddressDraft((draft) => ({ ...draft, label: event.target.value }))} placeholder="For example, Main wallet" required value={addressDraft.label} /></label>
                 <div className="address-preview"><code>{addressDraft.address}</code></div>
-                {(addressDraftCurrency?.requiresExtraId || addressDraftCurrency?.supportsExtraId) && <p className="notice notice-warning address-book-tag-notice">Memos and tags are not saved with addresses. Enter the current value for each swap.</p>}
+                {(addressDraftCurrency?.requiresExtraId || addressDraftCurrency?.supportsExtraId) && <p className="field-note address-book-tag-notice">Memos and tags are not saved with addresses. Check your wallet's instructions for each swap.</p>}
                 <div className="form-actions"><button className="button button-quiet" onClick={() => setAddressBookDialog('')} type="button">Cancel</button><button className="button button-primary" disabled={addressBookBusy} type="submit">{addressBookBusy ? 'Saving…' : 'Save address'}</button></div>
               </form>
             ) : (

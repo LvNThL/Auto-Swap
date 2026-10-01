@@ -30,9 +30,9 @@ function normalizeCurrencyCatalog(payload) {
       image: typeof record.image === 'string' ? record.image : '',
       featured: record.featured === true,
       tokenContract: typeof record.tokenContract === 'string' ? record.tokenContract : null,
-      hasExternalId: record.hasExternalId === true || record.isExtraIdSupported === true,
-      requiresExtraId: record.hasExternalId === true,
-      supportsExtraId: record.isExtraIdSupported === true,
+      hasExternalId: record.hasExternalId === true,
+      requiresExtraId: false,
+      supportsExtraId: record.hasExternalId === true || record.isExtraIdSupported === true,
     })
   }
 

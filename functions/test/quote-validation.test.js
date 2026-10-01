@@ -67,6 +67,21 @@ test('matches a quote to the saved preset details', () => {
   assert.equal(quoteMatchesPreset({ ...preset, fromAmount: '0.5' }, exchange), false)
 })
 
+test('binds a quote to the rate mode saved on its preset', () => {
+  const preset = {
+    fromCurrency: exchange.fromCurrency,
+    fromNetwork: exchange.fromNetwork,
+    toCurrency: exchange.toCurrency,
+    toNetwork: exchange.toNetwork,
+    fromAmount: exchange.fromAmount,
+    destinationAddress: exchange.toAddress,
+    refundAddress: exchange.refundAddress,
+  }
+  assert.equal(quoteMatchesPreset({ ...preset, flow: 'fixed-rate' }, { ...exchange, flow: 'fixed-rate' }), true)
+  assert.equal(quoteMatchesPreset({ ...preset, flow: 'standard' }, { ...exchange, flow: 'fixed-rate' }), false)
+  assert.equal(quoteMatchesPreset(preset, exchange), true)
+})
+
 test('expires quotes at and after their expiry timestamp', () => {
   assert.equal(quoteExpired(60000, 59999), false)
   assert.equal(quoteExpired(60000, 60000), true)

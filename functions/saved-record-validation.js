@@ -9,6 +9,7 @@ const presetSchema = {
   toCurrency: { maxLength: 32, required: true, lowercase: true },
   toNetwork: { maxLength: 32, required: true, lowercase: true },
   fromAmount: { maxLength: 48, required: true },
+  flow: { maxLength: 16 },
   destinationAddress: { maxLength: 256, required: true },
   destinationExtraId: { maxLength: 256 },
   refundAddress: { maxLength: 256 },
@@ -47,6 +48,8 @@ function normalizeRecord(input, schema) {
 
 function validatePreset(input) {
   const preset = normalizeRecord(input, presetSchema)
+  preset.flow ||= 'standard'
+  if (!['standard', 'fixed-rate'].includes(preset.flow)) throw new Error('Invalid flow.')
   if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(preset.fromAmount) ||
     !Number.isFinite(Number(preset.fromAmount)) || Number(preset.fromAmount) <= 0) {
     throw new Error('Invalid fromAmount.')

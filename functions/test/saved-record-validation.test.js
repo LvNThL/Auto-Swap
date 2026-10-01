@@ -44,7 +44,14 @@ test('trims preset text and canonicalizes currency/network identifiers', () => {
     fromNetwork: 'fil',
     toCurrency: 'usdt',
     toNetwork: 'bsc',
+    flow: 'standard',
   })
+})
+
+test('preserves valid rate modes and defaults legacy presets to standard', () => {
+  assert.equal(validatePreset({ ...validPreset, flow: 'fixed-rate' }).flow, 'fixed-rate')
+  assert.equal(validatePreset(validPreset).flow, 'standard')
+  assert.throws(() => validatePreset({ ...validPreset, flow: 'instant' }), /Invalid flow/)
 })
 
 test('generates preset names from the selected assets and ignores custom labels', () => {

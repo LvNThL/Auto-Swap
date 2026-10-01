@@ -51,13 +51,13 @@ test('normalizes crypto assets and filters fiat and malformed records', () => {
       featured: false,
       tokenContract: null,
       hasExternalId: true,
-      requiresExtraId: true,
+      requiresExtraId: false,
       supportsExtraId: true,
     },
   ])
 })
 
-test('distinguishes required extra IDs from optional extra-ID support', () => {
+test('treats provider extra-ID flags as optional wallet-dependent fields', () => {
   const currencies = normalizeCurrencyCatalog([
     { ticker: 'xrp', name: 'Ripple', network: 'xrp', hasExternalId: true, isExtraIdSupported: true, buy: true, sell: true },
     { ticker: 'usdt', name: 'Tether USD (TON)', network: 'ton', hasExternalId: false, isExtraIdSupported: true, buy: true, sell: true },
@@ -65,9 +65,9 @@ test('distinguishes required extra IDs from optional extra-ID support', () => {
   ])
 
   assert.deepEqual(currencies.map(({ ticker, hasExternalId, requiresExtraId, supportsExtraId }) => ({ ticker, hasExternalId, requiresExtraId, supportsExtraId })), [
-    { ticker: 'neiroeth', hasExternalId: true, requiresExtraId: true, supportsExtraId: false },
-    { ticker: 'xrp', hasExternalId: true, requiresExtraId: true, supportsExtraId: true },
-    { ticker: 'usdt', hasExternalId: true, requiresExtraId: false, supportsExtraId: true },
+    { ticker: 'neiroeth', hasExternalId: true, requiresExtraId: false, supportsExtraId: true },
+    { ticker: 'xrp', hasExternalId: true, requiresExtraId: false, supportsExtraId: true },
+    { ticker: 'usdt', hasExternalId: false, requiresExtraId: false, supportsExtraId: true },
   ])
 })
 
