@@ -377,6 +377,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   }
 
   const selectedPreset = presets.find((preset) => preset.id === selectedId)
+  const selectedRouteNumber = presets.findIndex((preset) => preset.id === selectedId) + 1
   const selectedPresetFromCurrency = selectedPreset
     ? findCurrency(currencies, selectedPreset.fromCurrency, selectedPreset.fromNetwork)
     : null
@@ -1378,7 +1379,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                       </span>
                     </h2>
                   </div>
-                  <span className="panel-index">01 / ROUTE</span>
+                  <span className="panel-index">{String(selectedRouteNumber).padStart(2, '0')} / {String(presets.length).padStart(2, '0')} ROUTES</span>
                 </div>
                 <div className="rate-mode-setting">
                   <span className="rate-mode-label-wrap">
