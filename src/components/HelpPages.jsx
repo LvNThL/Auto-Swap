@@ -18,7 +18,7 @@ const faqSections = [
     entries: [
       ['What does the 10-minute timer mean?', 'It controls how long the address is shown here. It does not cancel the ChangeNOW exchange. Don’t send to an expired address.'],
       ['What does “Close in AutoSwap” do?', 'It closes tracking here, not the ChangeNOW exchange. Close only if you have not sent funds.'],
-      ['Why can’t I close an expired tunnel yet?', 'AutoSwap checks ChangeNOW first. The close option appears only if it still reports “Waiting.”'],
+      ['Why can’t I close a tunnel after its address window ends?', 'The address window ending only means the deposit address is no longer available here; it does not cancel the ChangeNOW exchange. AutoSwap offers Close only after ChangeNOW confirms “Waiting.” “Expired” means ChangeNOW cancelled the tunnel.'],
       ['Why can I have only three waiting tunnels?', 'You can have three tunnels waiting for deposits. Deposit to or close an unfunded tunnel before opening another.'],
       ['I sent funds, but the status hasn’t changed. What now?', 'Don’t resend or close the tunnel. Network detection can take time. Keep your transaction ID; status refreshes automatically.'],
     ],

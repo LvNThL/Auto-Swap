@@ -1322,7 +1322,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     <option value="">Load a saved destination address…</option>
                     {destinationAddressEntries.map((entry) => <option value={entry.id} key={entry.id}>{entry.label}</option>)}
                   </select>
-                  <button className="button button-quiet" onClick={() => beginSaveAddress('destination')} type="button">Save destination address</button>
+                  <button className="button button-quiet" onClick={() => beginSaveAddress('destination')} type="button">Save address</button>
                   <button className="button button-quiet" onClick={() => setAddressBookDialog('manage-destination')} type="button">Manage address book</button>
                 </div>
                 <label className="field-wide">Refund address <span className="optional-label">Optional. Used only if the exchange refunds the swap.</span><input name="refundAddress" value={form.refundAddress} onChange={updateForm} autoComplete="off" placeholder="Crypto address on the send network" /></label>
@@ -1332,7 +1332,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                     <option value="">Load a saved refund address…</option>
                     {refundAddressEntries.map((entry) => <option value={entry.id} key={entry.id}>{entry.label}</option>)}
                   </select>
-                  <button className="button button-quiet" onClick={() => beginSaveAddress('refund')} type="button">Save refund address</button>
+                  <button className="button button-quiet" onClick={() => beginSaveAddress('refund')} type="button">Save address</button>
                   <button className="button button-quiet" onClick={() => setAddressBookDialog('manage-refund')} type="button">Manage address book</button>
                 </div>
                 <p className="field-note field-wide">Use a wallet that supports this asset and network. Review the live quote before opening a tunnel.</p>
