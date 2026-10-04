@@ -512,6 +512,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 :root[data-theme='dark'] .asset-select__menu-list::-webkit-scrollbar-thumb { border-color: #202a24; background: #526057; }
 
 @media (max-width: 760px) {
+  body { background: var(--page-bg); }
   .topbar { height: calc(62px + var(--safe-area-top)); padding: var(--safe-area-top) 18px 0; }
   .auth-shell { grid-template-rows: calc(62px + var(--safe-area-top)) minmax(0, 1fr); }
   .information-page { min-height: calc(100vh - 62px - var(--safe-area-top)); min-height: calc(100dvh - 62px - var(--safe-area-top)); }
