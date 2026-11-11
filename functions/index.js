@@ -380,7 +380,11 @@ async function consumeQuote(uid, quoteId, exchange, presetId) {
       activeTunnelIds: reservedTunnelIds,
       updatedAt: Timestamp.fromMillis(now),
     }, { merge: true })
-    return { flow: quote.flow ?? 'standard', rateId: quote.rateId ?? null }
+    return {
+      flow: quote.flow ?? 'standard',
+      rateId: quote.rateId ?? null,
+      estimatedAmount: quote.estimatedAmount,
+    }
   })
 }
 
