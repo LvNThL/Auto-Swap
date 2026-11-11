@@ -242,6 +242,9 @@ function SwapHistoryItem({ swap }) {
   const isTerminal = terminalSwapStatuses.has(status)
   const isActive = ['waiting', 'confirming', 'exchanging', 'sending'].includes(status)
   const progress = isActive ? getSwapProgress(status, swap.cancellationReason) : null
+  const receiveAmount = status === 'finished' && swap.toAmount != null
+    ? { label: 'Received', amount: swap.toAmount }
+    : { label: 'Est. receive', amount: swap.estimatedAmount ?? swap.toAmount }
 
   return (
     <article className="history-item">
@@ -249,7 +252,8 @@ function SwapHistoryItem({ swap }) {
         <div className="history-main">
           <strong>{swap.fromCurrency?.toUpperCase()} <span>to</span> {swap.toCurrency?.toUpperCase()}</strong>
           <small>{swap.fromAmount} {swap.fromCurrency?.toUpperCase()} ({swap.fromNetwork?.toUpperCase()}) → {swap.toCurrency?.toUpperCase()} ({swap.toNetwork?.toUpperCase()})</small>
-          <small>{swap.createdAt ? new Date(swap.createdAt).toLocaleString() : 'Date unavailable'}{swap.toAmount ? ` · ${status === 'finished' ? 'Received' : 'Est. receive'} ${swap.toAmount} ${swap.toCurrency?.toUpperCase()}` : ''}</small>
+          <small>{swap.createdAt ? new Date(swap.createdAt).toLocaleString() : 'Date unavailable'}{receiveAmount.amount != null ? ` · ${receiveAmount.label} ${receiveAmount.amount} ${swap.toCurrency?.toUpperCase()}` : ''}</small>
+          {swap.trackingNeedsAttention && <small className="notice-warning">AutoSwap could not save this exchange's tracking details. Check the original Exchange ID in ChangeNOW before sending funds.</small>}
         </div>
         {(swap.payinExplorerUrl || swap.payoutExplorerUrl) && (
           <div className="history-blockchain-links">
@@ -260,7 +264,7 @@ function SwapHistoryItem({ swap }) {
         {swap.exchangeId && <small className="history-exchange-id">Exchange ID: <a className="exchange-id-link" href={getChangeNowExchangeUrl(swap.exchangeId)} rel="noopener noreferrer" target="_blank" aria-label={`View exchange ${swap.exchangeId} on ChangeNOW`}><code>{swap.exchangeId}</code></a></small>}
       </div>
       <div className="history-status-controls">
-        <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{formatSwapStatus(status, swap.cancellationReason)}</span>
+        <span className={`history-status ${isTerminal ? `history-status-${status}` : 'history-status-pending'}`}>{swap.trackingNeedsAttention ? 'Tracking needs attention' : formatSwapStatus(status, swap.cancellationReason)}</span>
       </div>
       {progress && <div className="history-progress" aria-label="Active swap progress">
         <span className="history-progress-label" role="status" aria-label={`${progress.label}. ${progress.detail}`} title={progress.detail}>{progress.label}</span>
@@ -464,6 +468,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     ...locallyOpenHistorySwaps,
   ].sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
   const filteredSwapHistory = visibleSwapHistory.filter((swap) => {
+    if (swap.trackingNeedsAttention) return true
     if ((swap.id && openTunnelIds.has(swap.id)) || (swap.exchangeId && openTunnelIds.has(swap.exchangeId))) return true
     const status = String(swap.status || '').toLowerCase()
     if (historyFilter === 'in-progress-completed') return inProgressOrCompletedStatuses.has(status)
@@ -1562,9 +1567,10 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
             )}
             <div className="history-archives">
               <div className="history-archives-heading">
-                <div><strong>Monthly Swap Archives</strong><small>Crypto-only CSVs; no fiat values or cost basis.</small></div>
+                <div><strong>Monthly archives of older swaps</strong><small>CSVs are grouped by tunnel-open month (UTC); amounts and transaction hashes only, no fiat values or cost basis.</small></div>
                 <button className="button button-quiet" disabled={historyLoading || historyArchivesLoading} onClick={() => loadHistoryArchives().catch(() => setArchiveError("Couldn't load archives."))} type="button">{historyArchivesLoading ? 'Refreshing…' : 'Refresh'}</button>
               </div>
+              <p className="history-empty">The “All swaps” filter covers current history, not archived months. Download a month’s CSV above to access older records.</p>
               {archiveError && <div className="notice notice-warning" role="status">{archiveError}</div>}
               {historyArchives.length === 0
                 ? !archiveError && <p className="history-empty">No archives yet.</p>

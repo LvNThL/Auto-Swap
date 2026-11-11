@@ -1,12 +1,14 @@
 const CSV_COLUMNS = [
-  ['Opened At', 'createdAt'],
+  ['Tunnel Opened At (UTC)', 'createdAt'],
+  ['Completed At (UTC)', 'completedAt'],
   ['Last Status Update', 'updatedAt'],
   ['Status', 'status'],
   ['Exchange ID', 'exchangeId'],
   ['Sent Amount', 'fromAmount'],
   ['Sent Asset', 'fromCurrency'],
   ['Sent Network', 'fromNetwork'],
-  ['Received Amount', 'toAmount'],
+  ['Estimated Receive Amount', 'estimatedAmount'],
+  ['Provider-Reported Receive Amount', 'toAmount'],
   ['Received Asset', 'toCurrency'],
   ['Received Network', 'toNetwork'],
   ['Deposit Transaction Hash', 'payinHash'],
@@ -19,6 +21,10 @@ function timestampMillis(value) {
 }
 
 function serializeSwapHistoryRecord(id, record) {
+  const status = record.status ?? 'unknown'
+  const isTerminal = ['finished', 'failed', 'refunded', 'expired', 'cancelled'].includes(String(status).toLowerCase())
+  const noDepositCancellation = String(status).toLowerCase() === 'cancelled'
+    && ['user-requested', 'access-window-ended', 'provider-expired'].includes(record.cancellationReason)
   return {
     id,
     exchangeId: record.exchangeId ?? null,
@@ -27,14 +33,17 @@ function serializeSwapHistoryRecord(id, record) {
     fromAmount: record.fromAmount,
     toCurrency: record.toCurrency,
     toNetwork: record.toNetwork,
-    toAmount: record.toAmount ?? null,
+    toAmount: noDepositCancellation && record.estimatedAmount == null ? null : record.toAmount ?? null,
+    estimatedAmount: record.estimatedAmount ?? (noDepositCancellation ? record.toAmount ?? null : null),
     payinHash: record.payinHash ?? null,
     payoutHash: record.payoutHash ?? null,
     payinExplorerUrl: record.payinExplorerUrl ?? null,
     payoutExplorerUrl: record.payoutExplorerUrl ?? null,
-    status: record.status ?? 'unknown',
+    status,
     cancellationReason: record.cancellationReason ?? null,
     createdAt: timestampMillis(record.createdAt),
+    completedAt: timestampMillis(record.completedAt)
+      ?? (isTerminal && record.providerLiveTunnel !== true ? timestampMillis(record.updatedAt) : null),
     updatedAt: timestampMillis(record.updatedAt),
   }
 }
@@ -74,7 +83,7 @@ function csvCell(value) {
 function historyRecordsToCsv(records) {
   const header = CSV_COLUMNS.map(([label]) => csvCell(label)).join(',')
   const rows = records.map((record) => CSV_COLUMNS.map(([, field]) => {
-    const value = ['createdAt', 'updatedAt'].includes(field) && Number.isFinite(record[field])
+    const value = ['createdAt', 'completedAt', 'updatedAt'].includes(field) && Number.isFinite(record[field])
       ? new Date(record[field]).toISOString()
       : record[field]
     return csvCell(value)

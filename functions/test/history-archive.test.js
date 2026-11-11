@@ -19,6 +19,7 @@ test('serializes tax history without dropping timestamps or explorer data', () =
     toCurrency: 'eth',
     toNetwork: 'eth',
     toAmount: '8.2',
+    estimatedAmount: '8.1',
     payinHash: 'deposit-hash',
     payinExplorerUrl: 'https://example.com/deposit-hash',
     status: 'finished',
@@ -32,6 +33,7 @@ test('serializes tax history without dropping timestamps or explorer data', () =
     toCurrency: 'eth',
     toNetwork: 'eth',
     toAmount: '8.2',
+    estimatedAmount: '8.1',
     payinHash: 'deposit-hash',
     payoutHash: null,
     payinExplorerUrl: 'https://example.com/deposit-hash',
@@ -39,8 +41,25 @@ test('serializes tax history without dropping timestamps or explorer data', () =
     status: 'finished',
     cancellationReason: null,
     createdAt: Date.UTC(2026, 7, 12),
+    completedAt: null,
     updatedAt: null,
   })
+})
+
+test('does not present a legacy no-deposit estimate as a received payout', () => {
+  const record = serializeSwapHistoryRecord('record2', {
+    fromCurrency: 'btc',
+    fromNetwork: 'btc',
+    fromAmount: '0.5',
+    toCurrency: 'eth',
+    toNetwork: 'eth',
+    toAmount: '8.2',
+    status: 'cancelled',
+    cancellationReason: 'user-requested',
+  })
+
+  assert.equal(record.toAmount, null)
+  assert.equal(record.estimatedAmount, '8.2')
 })
 
 test('groups archives by UTC month and uses an account-scoped object path', () => {
@@ -70,6 +89,7 @@ test('merges archive retries without duplicating executions', () => {
 test('creates spreadsheet-safe CSV with tax-relevant transaction fields', () => {
   const csv = historyRecordsToCsv([{
     createdAt: Date.UTC(2026, 0, 2),
+    completedAt: Date.UTC(2026, 0, 3, 5, 6, 7),
     updatedAt: Date.UTC(2026, 0, 3, 4, 5, 6),
     status: 'finished',
     exchangeId: '=IMPORTXML("unsafe")',
@@ -84,9 +104,10 @@ test('creates spreadsheet-safe CSV with tax-relevant transaction fields', () => 
     cancellationReason: 'user-requested',
   }])
 
-  assert.match(csv, /^"Opened At","Last Status Update","Status","Exchange ID"/)
+  assert.match(csv, /^"Tunnel Opened At \(UTC\)","Completed At \(UTC\)","Last Status Update","Status","Exchange ID"/)
   assert.match(csv, /"'=?IMPORTXML\(""unsafe""\)"/)
   assert.match(csv, /"2026-01-02T00:00:00\.000Z"/)
+  assert.match(csv, /"2026-01-03T05:06:07\.000Z"/)
   assert.match(csv, /"2026-01-03T04:05:06\.000Z"/)
   assert.match(csv, /"deposit-hash","payout-hash","user-requested"$/)
 })

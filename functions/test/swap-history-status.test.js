@@ -6,6 +6,7 @@ const {
   isWaitingForDeposit,
   isLocallyClosedSwap,
   isArchivableSwapHistoryRecord,
+  getPendingSwapAction,
   shouldMonitorProviderStatus,
   tunnelAccessExpiresAt,
   isTunnelAccessWindowOpen,
@@ -25,6 +26,19 @@ test('marks a pre-deposit tunnel as cancelled when ChangeNOW reports expiration'
   assert.equal(pendingHistoryStatus('expired'), 'cancelled')
   assert.equal(pendingHistoryStatus('waiting'), 'waiting')
   assert.equal(pendingHistoryStatus('finished'), 'finished')
+})
+
+test('preserves pending swaps until terminal status or expired access window', () => {
+  assert.equal(getPendingSwapAction('waiting', false), 'keep-pending')
+  assert.equal(getPendingSwapAction('unknown', false), 'keep-pending')
+  for (const status of ['confirming', 'exchanging', 'sending']) {
+    assert.equal(getPendingSwapAction(status, false), 'save-to-history')
+  }
+  assert.equal(getPendingSwapAction('expired', true), 'keep-expired')
+  assert.equal(getPendingSwapAction('expired', false), 'save-expired')
+  for (const status of ['finished', 'failed', 'refunded', 'cancelled']) {
+    assert.equal(getPendingSwapAction(status, false), 'save-to-history', status)
+  }
 })
 
 test('only allows manual closeout while ChangeNOW reports waiting for a deposit', () => {

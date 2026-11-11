@@ -2,7 +2,7 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https')
 const { onSchedule } = require('firebase-functions/v2/scheduler')
 const { defineSecret } = require('firebase-functions/params')
 const { initializeApp } = require('firebase-admin/app')
-const { getFirestore, Timestamp } = require('firebase-admin/firestore')
+const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore')
 const { getStorage } = require('firebase-admin/storage')
 const { normalizeExchangeFlow, normalizeLimitEstimate, quoteMatchesExchange, quoteMatchesPreset, quoteExpired, getQuoteExpiresAt } = require('./quote-validation')
 const { buildCreateExchangeBody } = require('./create-exchange-request')
@@ -13,6 +13,7 @@ const {
   isWaitingForDeposit,
   isLocallyClosedSwap,
   isArchivableSwapHistoryRecord,
+  getPendingSwapAction,
   shouldMonitorProviderStatus,
   terminalSwapStatuses,
   isTunnelAccessWindowOpen,
@@ -26,6 +27,7 @@ const {
   serializeSwapHistoryRecord,
 } = require('./history-archive')
 const { extractTransactionHistoryDetails } = require('./transaction-history-details')
+const { isTerminalHistoryStatus } = require('./history-records')
 const {
   collectWaitingTunnelIds,
   reserveTunnelId,
@@ -49,7 +51,7 @@ const CREATE_COOLDOWN_MS = 10000
 const QUOTE_TTL_MS = 10 * 60 * 1000
 const TUNNEL_ACCESS_TTL_MS = 10 * 60 * 1000
 const FIXED_RATE_TUNNEL_ACCESS_TTL_MS = 10 * 60 * 1000
-const PENDING_SWAP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+const FAILED_CREATE_RETENTION_MS = 24 * 60 * 60 * 1000
 const CURRENCY_CACHE_TTL_MS = 300000
 const SAVED_RECORD_WRITE_COOLDOWN_MS = 1000
 const cachedCurrencies = new Map()
@@ -120,12 +122,14 @@ async function savePendingSwapToHistory({ uid, pendingDoc, exchangeId, transacti
       fromAmount: pendingRecord.fromAmount,
       toCurrency: pendingRecord.toCurrency,
       toNetwork: pendingRecord.toNetwork,
-      toAmount: providerToAmount == null ? pendingRecord.estimatedAmount ?? null : String(providerToAmount),
+      toAmount: providerToAmount == null ? null : String(providerToAmount),
+      estimatedAmount: pendingRecord.estimatedAmount ?? null,
       ...transactionDetails,
       status,
       ...(cancellationReason ? { cancellationReason } : {}),
-      providerLiveTunnel: isLocalClose,
+      providerLiveTunnel: isLocalClose || !isTerminalHistoryStatus(status),
       ...(isLocalClose ? { lastProviderCheckAt: now } : {}),
+      ...(!isLocalClose && isTerminalHistoryStatus(status) ? { completedAt: now } : {}),
       createdAt: pendingRecord.tunnelOpenedAt ?? pendingRecord.createdAt ?? now,
       updatedAt: now,
     })
@@ -374,7 +378,12 @@ async function consumeQuote(uid, quoteId, exchange, presetId) {
       throw new HttpsError('resource-exhausted', 'This account already has 3 tunnels waiting for a deposit. Wait for a deposit or close a waiting tunnel before opening another.')
     }
 
-    transaction.update(quoteRef, { consumedAt: Timestamp.fromMillis(now) })
+    transaction.update(quoteRef, {
+      consumedAt: Timestamp.fromMillis(now),
+      trackingStatus: 'creating',
+      status: 'creating',
+      expiresAt: FieldValue.delete(),
+    })
     transaction.set(rateLimitRef, { lastRequestAt: Timestamp.fromMillis(now) })
     transaction.set(capacityRef, {
       activeTunnelIds: reservedTunnelIds,
@@ -674,7 +683,15 @@ exports.createSwapTunnel = onCall(
         body: buildCreateExchangeBody(exchange, toAddress, quote),
       })
     } catch (providerError) {
-      if (isConfirmedCreateFailure(providerError)) await releaseTunnelSlot(uid, quoteId)
+      if (isConfirmedCreateFailure(providerError)) {
+        await Promise.all([
+          releaseTunnelSlot(uid, quoteId),
+          database.collection('users').doc(uid).collection('swapQuotes').doc(quoteId).update({
+            trackingStatus: 'create-failed',
+            expiresAt: Timestamp.fromMillis(Date.now() + FAILED_CREATE_RETENTION_MS),
+          }),
+        ])
+      }
       throw providerError
     }
 
@@ -692,7 +709,8 @@ exports.createSwapTunnel = onCall(
     let trackingSaved = false
     if (typeof exchangeId === 'string') {
       try {
-        await database.collection('users').doc(uid).collection('swapQuotes').doc(quoteId).update({
+        const pendingRef = database.collection('users').doc(uid).collection('swapQuotes').doc(quoteId)
+        const pendingUpdate = {
           exchangeId,
           status: typeof result.status === 'string' ? result.status : 'waiting',
           flow: exchange.flow,
@@ -704,8 +722,21 @@ exports.createSwapTunnel = onCall(
           tunnelOpenedAt: Timestamp.fromMillis(tunnelOpenedAt),
           tunnelAccessExpiresAt: Timestamp.fromMillis(accessExpiresAt),
           updatedAt: Timestamp.fromMillis(tunnelOpenedAt),
-          expiresAt: Timestamp.fromMillis(tunnelOpenedAt + PENDING_SWAP_RETENTION_MS),
-        })
+          expiresAt: FieldValue.delete(),
+          ...(isTerminalHistoryStatus(result.status) ? { completedAt: Timestamp.fromMillis(tunnelOpenedAt) } : {}),
+        }
+        let saveError
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            await pendingRef.update(pendingUpdate)
+            saveError = null
+            break
+          } catch (error) {
+            saveError = error
+            if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)))
+          }
+        }
+        if (saveError) throw saveError
         trackingSaved = true
         if (!isWaitingForDeposit(result.status ?? 'waiting')) await releaseTunnelSlot(uid, quoteId)
       } catch (trackingError) {
@@ -739,7 +770,7 @@ exports.getSwapHistory = onCall(
     const userQuotes = database.collection('users').doc(request.auth.uid).collection('swapQuotes')
     const [snapshot, pendingSnapshot] = await Promise.all([
       swapHistoryCollection(request.auth.uid).orderBy('createdAt', 'desc').limit(50).get(),
-      userQuotes.where('trackingStatus', '==', 'pending').limit(50).get(),
+      userQuotes.where('trackingStatus', 'in', ['pending', 'creating']).limit(50).get(),
     ])
 
     return {
@@ -765,6 +796,7 @@ exports.getSwapHistory = onCall(
         createdAt: pendingDoc.get('tunnelOpenedAt')?.toMillis() ?? pendingDoc.get('createdAt')?.toMillis() ?? null,
         lastCheckedAt: pendingDoc.get('updatedAt')?.toMillis() ?? null,
         accessExpiresAt: pendingDoc.get('tunnelAccessExpiresAt')?.toMillis() ?? null,
+        trackingNeedsAttention: pendingDoc.get('trackingStatus') === 'creating',
       })),
     }
   },
@@ -898,6 +930,58 @@ exports.downloadSwapHistoryArchive = onCall(
   },
 )
 
+async function applyPendingSwapStatus({ uid, pendingDoc, exchangeId, result, transactionDetails }) {
+  const pendingRecord = pendingDoc.data()
+  const accessWindowOpen = isTunnelAccessWindowOpen(pendingRecord, Date.now(), TUNNEL_ACCESS_TTL_MS)
+  const action = getPendingSwapAction(result.status, accessWindowOpen)
+
+  if (action === 'save-to-history') {
+    return savePendingSwapToHistory({
+      uid,
+      pendingDoc,
+      exchangeId,
+      transactionDetails,
+      status: result.status,
+      providerToAmount: result.toAmount,
+      ...(terminalSwapStatuses.has(result.status.toLowerCase()) && !depositReceived(result.status)
+        ? { cancellationReason: 'provider-terminal' }
+        : {}),
+    })
+  }
+
+  if (action === 'save-expired') {
+    return savePendingSwapToHistory({
+      uid,
+      pendingDoc,
+      exchangeId,
+      transactionDetails,
+      status: pendingHistoryStatus(result.status),
+      providerToAmount: result.toAmount,
+      cancellationReason: 'provider-expired',
+    })
+  }
+
+  const now = Timestamp.fromMillis(Date.now())
+  await pendingDoc.ref.update({
+    ...transactionDetails,
+    status: result.status,
+    ...(action === 'keep-expired' ? { providerLiveTunnel: false } : {}),
+    expiresAt: FieldValue.delete(),
+    lastProviderCheckAt: now,
+    updatedAt: now,
+  })
+  if (action === 'keep-expired' || !isWaitingForDeposit(result.status)) {
+    await releaseTunnelSlot(uid, pendingDoc.id)
+  }
+  return {
+    id: pendingDoc.id,
+    exchangeId,
+    status: result.status,
+    ...transactionDetails,
+    pending: true,
+  }
+}
+
 async function updateLocallyClosedSwapStatus(uid, historyDoc, result, transactionDetails) {
   const status = result.status.toLowerCase()
   const checkedAt = Timestamp.fromMillis(Date.now())
@@ -916,6 +1000,7 @@ async function updateLocallyClosedSwapStatus(uid, historyDoc, result, transactio
     status: status === 'expired' ? pendingHistoryStatus(result.status) : result.status,
     cancellationReason: status === 'expired' ? 'provider-expired' : null,
     providerLiveTunnel: shouldMonitorProviderStatus(status),
+    ...(!shouldMonitorProviderStatus(status) ? { completedAt: checkedAt } : {}),
     lastProviderCheckAt: checkedAt,
     ...(result.toAmount == null ? {} : { toAmount: String(result.toAmount) }),
     ...transactionDetails,
@@ -968,60 +1053,20 @@ exports.refreshSwapStatus = onCall(
       return updateLocallyClosedSwapStatus(request.auth.uid, historyDoc, result, transactionDetails)
     }
 
-    if (pendingDoc) {
-      const pendingRecord = pendingDoc.data()
-      const accessWindowOpen = isTunnelAccessWindowOpen(pendingRecord, Date.now(), TUNNEL_ACCESS_TTL_MS)
-      if (depositReceived(status)) {
-        return savePendingSwapToHistory({
-          uid: request.auth.uid,
-          pendingDoc,
-          exchangeId,
-          transactionDetails,
-          status: result.status,
-          providerToAmount: result.toAmount,
-        })
-      }
-
-      if (status === 'expired') {
-        if (accessWindowOpen) {
-          await pendingDoc.ref.update({ ...transactionDetails, status: result.status, providerLiveTunnel: false, updatedAt: Timestamp.fromMillis(Date.now()) })
-          await releaseTunnelSlot(request.auth.uid, pendingDoc.id)
-          return { id: pendingDoc.id, exchangeId, status: result.status, ...transactionDetails, pending: true }
-        }
-
-        return savePendingSwapToHistory({
-          uid: request.auth.uid,
-          pendingDoc,
-          exchangeId,
-          transactionDetails,
-          status: pendingHistoryStatus(result.status),
-          providerToAmount: result.toAmount,
-          cancellationReason: 'provider-expired',
-        })
-      }
-
-      if (terminalSwapStatuses.has(status)) {
-        return savePendingSwapToHistory({
-          uid: request.auth.uid,
-          pendingDoc,
-          exchangeId,
-          transactionDetails,
-          status: result.status,
-          providerToAmount: result.toAmount,
-          cancellationReason: 'provider-terminal',
-        })
-      }
-
-      await pendingDoc.ref.update({ ...transactionDetails, status: result.status, updatedAt: Timestamp.fromMillis(Date.now()) })
-      if (!isWaitingForDeposit(status)) await releaseTunnelSlot(request.auth.uid, pendingDoc.id)
-      return { id: pendingDoc.id, exchangeId, status: result.status, ...transactionDetails, pending: true }
-    }
+    if (pendingDoc) return applyPendingSwapStatus({
+      uid: request.auth.uid,
+      pendingDoc,
+      exchangeId,
+      result,
+      transactionDetails,
+    })
 
     await historyDoc.ref.update({
       status: result.status,
       ...(savedRecord.providerLiveTunnel === true
         ? { providerLiveTunnel: shouldMonitorProviderStatus(status) }
         : {}),
+      ...(isTerminalHistoryStatus(status) ? { completedAt: Timestamp.fromMillis(Date.now()) } : {}),
       ...(result.toAmount == null ? {} : { toAmount: String(result.toAmount) }),
       ...transactionDetails,
       updatedAt: Timestamp.fromMillis(Date.now()),
@@ -1032,12 +1077,47 @@ exports.refreshSwapStatus = onCall(
   },
 )
 
+async function reconcilePendingSwap(pendingDoc) {
+  const uid = pendingDoc.ref.parent.parent?.id
+  const pendingRecord = pendingDoc.data()
+  const exchangeId = pendingRecord.exchangeId
+  if (!uid || typeof exchangeId !== 'string' || !exchangeId) {
+    throw new Error('Pending swap is missing its owner or exchange ID.')
+  }
+
+  await pendingDoc.ref.update({ expiresAt: FieldValue.delete() })
+  await enforceRequestCooldown(uid, `status-${exchangeId}`, 5000)
+  const result = await callChangeNow(`/by-id?id=${encodeURIComponent(exchangeId)}`)
+  if (typeof result.status !== 'string' || !result.status.trim()) {
+    throw new Error('ChangeNOW did not return a transaction status.')
+  }
+
+  const transactionDetails = extractTransactionHistoryDetails(result, {
+    fromNetwork: pendingRecord.fromNetwork,
+    toNetwork: pendingRecord.toNetwork,
+  })
+  return applyPendingSwapStatus({
+    uid,
+    pendingDoc,
+    exchangeId,
+    result,
+    transactionDetails,
+  })
+}
+
 exports.reconcileProviderLiveTunnels = onSchedule(
-  { schedule: '*/15 * * * *', timeZone: 'UTC', region: 'us-central1', maxInstances: 1, timeoutSeconds: 540 },
+  { schedule: '*/15 * * * *', timeZone: 'UTC', region: 'us-central1', secrets: [changeNowApiKey], maxInstances: 1, timeoutSeconds: 540 },
   async () => {
-    const snapshot = await database.collectionGroup('swapHistory')
-      .where('providerLiveTunnel', '==', true)
-      .get()
+    const [snapshot, pendingSnapshot] = await Promise.all([
+      database.collectionGroup('swapHistory')
+        .where('providerLiveTunnel', '==', true)
+        .get(),
+      database.collectionGroup('swapQuotes')
+        .where('trackingStatus', '==', 'pending')
+        .orderBy('updatedAt', 'asc')
+        .limit(20)
+        .get(),
+    ])
     const getLastCheckedAt = (document) => {
       const timestamp = document.get('lastProviderCheckAt') ?? document.get('updatedAt') ?? document.get('createdAt')
       return typeof timestamp?.toMillis === 'function' ? timestamp.toMillis() : Number(timestamp) || 0
@@ -1076,7 +1156,36 @@ exports.reconcileProviderLiveTunnels = onSchedule(
       }))
     }
 
-    console.info('Reconciled provider-live swaps:', records.length, 'of', snapshot.size, 'with', failedChecks, 'failed checks.')
+    let failedPendingChecks = 0
+    for (let offset = 0; offset < pendingSnapshot.docs.length; offset += 5) {
+      await Promise.all(pendingSnapshot.docs.slice(offset, offset + 5).map(async (pendingDoc) => {
+        try {
+          await reconcilePendingSwap(pendingDoc)
+        } catch (error) {
+          failedPendingChecks += 1
+          const now = Timestamp.fromMillis(Date.now())
+          await pendingDoc.ref.update({ lastProviderCheckAt: now, updatedAt: now }).catch(() => {})
+          console.warn('Could not reconcile pending swap:', JSON.stringify({
+            exchangeId: typeof pendingDoc.get('exchangeId') === 'string' ? pendingDoc.get('exchangeId') : null,
+            code: error.code ?? null,
+          }))
+        }
+      }))
+    }
+
+    console.info(
+      'Reconciled provider-live swaps:',
+      records.length,
+      'of',
+      snapshot.size,
+      'with',
+      failedChecks,
+      'failed checks; pending swaps:',
+      pendingSnapshot.size,
+      'with',
+      failedPendingChecks,
+      'failed checks.',
+    )
   },
 )
 

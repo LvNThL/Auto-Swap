@@ -30,6 +30,14 @@ function isArchivableSwapHistoryRecord(record) {
     && record?.providerLiveTunnel !== true
 }
 
+function getPendingSwapAction(status, accessWindowOpen) {
+  const normalizedStatus = String(status ?? '').toLowerCase()
+  if (depositReceived(normalizedStatus)) return 'save-to-history'
+  if (normalizedStatus === 'expired') return accessWindowOpen ? 'keep-expired' : 'save-expired'
+  if (terminalSwapStatuses.has(normalizedStatus)) return 'save-to-history'
+  return 'keep-pending'
+}
+
 function shouldMonitorProviderStatus(status) {
   return !terminalSwapStatuses.has(String(status ?? '').toLowerCase())
 }
@@ -56,6 +64,7 @@ module.exports = {
   isWaitingForDeposit,
   isLocallyClosedSwap,
   isArchivableSwapHistoryRecord,
+  getPendingSwapAction,
   shouldMonitorProviderStatus,
   terminalSwapStatuses,
   tunnelAccessExpiresAt,
