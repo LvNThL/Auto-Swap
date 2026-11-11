@@ -2,7 +2,7 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https')
 const { onSchedule } = require('firebase-functions/v2/scheduler')
 const { defineSecret } = require('firebase-functions/params')
 const { initializeApp } = require('firebase-admin/app')
-const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore')
+const { getFirestore, Timestamp, FieldValue, FieldPath } = require('firebase-admin/firestore')
 const { getStorage } = require('firebase-admin/storage')
 const { normalizeExchangeFlow, normalizeLimitEstimate, quoteMatchesExchange, quoteMatchesPreset, quoteExpired, getQuoteExpiresAt } = require('./quote-validation')
 const { buildCreateExchangeBody } = require('./create-exchange-request')
@@ -28,6 +28,11 @@ const {
 } = require('./history-archive')
 const { extractTransactionHistoryDetails } = require('./transaction-history-details')
 const { isTerminalHistoryStatus } = require('./history-records')
+const {
+  HISTORY_PAGE_SIZE,
+  normalizeHistoryCursor,
+  pageHistorySnapshot,
+} = require('./history-pagination')
 const {
   collectWaitingTunnelIds,
   reserveTunnelId,
@@ -767,15 +772,32 @@ exports.getSwapHistory = onCall(
   { region: 'us-central1', maxInstances: 5, invoker: 'public', cors: ['https://lvnthl.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'] },
   async (request) => {
     assertVerifiedUser(request)
+    let cursor
+    try {
+      cursor = normalizeHistoryCursor(request.data?.cursor)
+    } catch {
+      throw new HttpsError('invalid-argument', 'Invalid swap history cursor.')
+    }
+
     const userQuotes = database.collection('users').doc(request.auth.uid).collection('swapQuotes')
+    let historyQuery = swapHistoryCollection(request.auth.uid)
+      .orderBy('createdAt', 'desc')
+      .orderBy(FieldPath.documentId(), 'desc')
+      .limit(HISTORY_PAGE_SIZE + 1)
+    if (cursor) {
+      historyQuery = historyQuery.startAfter(Timestamp.fromMillis(cursor.createdAt), cursor.id)
+    }
     const [snapshot, pendingSnapshot] = await Promise.all([
-      swapHistoryCollection(request.auth.uid).orderBy('createdAt', 'desc').limit(50).get(),
-      userQuotes.where('trackingStatus', 'in', ['pending', 'creating']).limit(50).get(),
+      historyQuery.get(),
+      cursor ? Promise.resolve(null) : userQuotes.where('trackingStatus', 'in', ['pending', 'creating']).limit(50).get(),
     ])
+    const page = pageHistorySnapshot(snapshot)
 
     return {
-      swaps: snapshot.docs.map(serializeSwapHistory),
-      pendingSwaps: pendingSnapshot.docs.map((pendingDoc) => ({
+      swaps: page.documents.map(serializeSwapHistory),
+      hasMore: page.hasMore,
+      nextCursor: page.nextCursor,
+      pendingSwaps: (pendingSnapshot?.docs ?? []).map((pendingDoc) => ({
         id: pendingDoc.id,
         presetId: pendingDoc.get('presetId') ?? null,
         flow: pendingDoc.get('flow') ?? 'standard',

@@ -10,6 +10,7 @@ import {
   listAddressBookEntries,
 } from '../services/AddressBookManager.js'
 import { isValidLimitEstimate } from '../services/limit-estimate.js'
+import { filterSwapHistoryRecords, mergeSwapHistoryRecords } from '../services/swap-history-view.js'
 import { createPreset, deletePreset, listPresets, updatePreset } from '../services/PresetManager.js'
 
 const emptyPreset = {
@@ -219,8 +220,6 @@ function getSwapProgress(status, cancellationReason) {
 }
 
 const terminalSwapStatuses = new Set(['finished', 'failed', 'refunded', 'expired', 'cancelled'])
-const depositReceivedStatuses = new Set(['confirming', 'exchanging', 'sending', 'finished', 'failed', 'refunded'])
-const inProgressOrCompletedStatuses = new Set(['waiting', 'confirming', 'exchanging', 'sending', 'finished'])
 const MAX_WAITING_TUNNELS = 3
 const autoSwapClosureReasons = new Set(['user-requested', 'access-window-ended'])
 
@@ -326,12 +325,19 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
   const [historyFilter, setHistoryFilter] = useState('in-progress-completed')
+  const [historyNextCursor, setHistoryNextCursor] = useState(null)
+  const [historyHasMore, setHistoryHasMore] = useState(false)
+  const [historyPageLoading, setHistoryPageLoading] = useState(false)
   const [cancellingExchangeId, setCancellingExchangeId] = useState('')
   const [statusCheckByExchange, setStatusCheckByExchange] = useState({})
   const [copyToast, setCopyToast] = useState(null)
   const [clockNow, setClockNow] = useState(() => Date.now())
+  const swapHistoryRef = useRef([])
 
   useEffect(() => () => window.clearTimeout(routeListScrollTimeout.current), [])
+  useEffect(() => {
+    swapHistoryRef.current = swapHistory
+  }, [swapHistory])
 
   function handleRouteListScroll() {
     setRouteListScrolling(true)
@@ -460,23 +466,11 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       pending: true,
     }))
   const visibleSwapHistory = [
-    ...swapHistory.filter((swap) => {
-      const status = String(swap.status || '').toLowerCase()
-      return depositReceivedStatuses.has(status) || terminalSwapStatuses.has(status)
-    }),
+    ...swapHistory,
     ...pendingHistorySwaps,
     ...locallyOpenHistorySwaps,
   ].sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
-  const filteredSwapHistory = visibleSwapHistory.filter((swap) => {
-    if (swap.trackingNeedsAttention) return true
-    if ((swap.id && openTunnelIds.has(swap.id)) || (swap.exchangeId && openTunnelIds.has(swap.exchangeId))) return true
-    const status = String(swap.status || '').toLowerCase()
-    if (historyFilter === 'in-progress-completed') return inProgressOrCompletedStatuses.has(status)
-    if (historyFilter === 'cancelled') return status === 'cancelled' && swap.cancellationReason !== 'provider-expired'
-    if (historyFilter === 'expired') return status === 'expired' || swap.cancellationReason === 'provider-expired'
-    if (historyFilter === 'failed') return status === 'failed' || status === 'refunded'
-    return true
-  })
+  const filteredSwapHistory = filterSwapHistoryRecords(visibleSwapHistory, historyFilter, openTunnelIds)
   const recentSwapHistory = filteredSwapHistory.slice(0, 7)
   const olderSwapHistory = filteredSwapHistory.slice(7)
   const fromCurrencies = currencies.filter((currency) => currency.canSell)
@@ -505,8 +499,28 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   async function loadSwapHistory() {
     const getHistory = httpsCallable(functions, 'getSwapHistory')
     const { data } = await getHistory({})
-    setSwapHistory(data.swaps ?? [])
+    setSwapHistory((current) => mergeSwapHistoryRecords(current, data.swaps ?? []))
     setPendingSwaps(data.pendingSwaps ?? [])
+    setHistoryNextCursor(data.nextCursor ?? null)
+    setHistoryHasMore(Boolean(data.hasMore))
+  }
+
+  async function loadOlderSwapHistory() {
+    if (!historyHasMore || !historyNextCursor || historyPageLoading) return
+
+    setHistoryPageLoading(true)
+    setHistoryError('')
+    try {
+      const getHistory = httpsCallable(functions, 'getSwapHistory')
+      const { data } = await getHistory({ cursor: historyNextCursor })
+      setSwapHistory((current) => mergeSwapHistoryRecords(current, data.swaps ?? []))
+      setHistoryNextCursor(data.nextCursor ?? null)
+      setHistoryHasMore(Boolean(data.hasMore))
+    } catch {
+      setHistoryError("Couldn't load older swaps. Your current history is still available; try again.")
+    } finally {
+      setHistoryPageLoading(false)
+    }
   }
 
   async function closeWaitingSwap(swap) {
@@ -615,8 +629,10 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       try {
         const { data } = await getHistory({})
         if (active) {
-          setSwapHistory(data.swaps ?? [])
+          setSwapHistory((current) => mergeSwapHistoryRecords(current, data.swaps ?? []))
           setPendingSwaps(data.pendingSwaps ?? [])
+          setHistoryNextCursor(data.nextCursor ?? null)
+          setHistoryHasMore(Boolean(data.hasMore))
         }
         return data
       } catch {
@@ -636,9 +652,12 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         const waitingForDeposit = data.pendingSwaps ?? []
         if (!active) return
         setHistoryError('')
-        setSwapHistory(swaps)
+        const loadedHistory = mergeSwapHistoryRecords(swapHistoryRef.current, swaps)
+        setSwapHistory((current) => mergeSwapHistoryRecords(current, swaps))
         setPendingSwaps(waitingForDeposit)
-        const outstandingHistory = swaps.filter((swap) => {
+        setHistoryNextCursor(data.nextCursor ?? null)
+        setHistoryHasMore(Boolean(data.hasMore))
+        const outstandingHistory = loadedHistory.filter((swap) => {
           if (!swap.exchangeId) return false
           const isLocallyClosed = isLocallyClosedSwap(swap)
           if (terminalSwapStatuses.has(String(swap.status).toLowerCase()) && !isLocallyClosed) return false
@@ -1535,7 +1554,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               <label className="history-filter" htmlFor="swap-history-filter">
                 <span>Show</span>
                 <select id="swap-history-filter" value={historyFilter} onChange={(event) => setHistoryFilter(event.target.value)}>
-                  <option value="all">All swaps</option>
+                  <option value="all">All current records</option>
                   <option value="in-progress-completed">In progress &amp; completed</option>
                   <option value="cancelled">Cancelled</option>
                   <option value="expired">Expired</option>
@@ -1565,12 +1584,19 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                 )}
               </>
             )}
+            {historyHasMore && (
+              <div className="history-load-more">
+                <button className="button button-quiet" disabled={historyPageLoading} onClick={loadOlderSwapHistory} type="button">
+                  {historyPageLoading ? 'Loading older swaps…' : 'Load older swaps'}
+                </button>
+              </div>
+            )}
             <div className="history-archives">
               <div className="history-archives-heading">
                 <div><strong>Monthly archives of older swaps</strong><small>CSVs are grouped by tunnel-open month (UTC); amounts and transaction hashes only, no fiat values or cost basis.</small></div>
                 <button className="button button-quiet" disabled={historyLoading || historyArchivesLoading} onClick={() => loadHistoryArchives().catch(() => setArchiveError("Couldn't load archives."))} type="button">{historyArchivesLoading ? 'Refreshing…' : 'Refresh'}</button>
               </div>
-              <p className="history-empty">The “All swaps” filter covers current history, not archived months. Download a month’s CSV above to access older records.</p>
+              <p className="history-empty">Current history loads in pages. Use “Load older swaps” for more records; archived months remain available as CSVs above.</p>
               {archiveError && <div className="notice notice-warning" role="status">{archiveError}</div>}
               {historyArchives.length === 0
                 ? !archiveError && <p className="history-empty">No archives yet.</p>

@@ -257,6 +257,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .history-log-more > summary { padding: 12px 0; color: var(--muted); font-size: 10px; font-weight: 600; cursor: pointer; }
 .history-log-scroll { max-height: 320px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 6px; }
 .history-log-scroll .history-list { margin-top: 0; }
+.history-load-more { display: flex; justify-content: center; margin-top: 14px; }
 .history-archives-heading, .history-archive-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .history-archives-heading > div { display: grid; gap: 4px; }
 .history-archives-heading strong { font-size: 11px; }
