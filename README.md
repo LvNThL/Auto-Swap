@@ -15,9 +15,10 @@ Cloud Functions deployment requires a Firebase project on the Blaze billing plan
 
 ## Validation
 
-Run the backend unit tests and production frontend build from the project root. These are also the checks run by the GitHub Pages workflow.
+Run the slippage validation and backend unit tests and production frontend build from the project root. These are also the checks run by the GitHub Pages workflow.
 
 ```powershell
+node --test src/services/limit-estimate.test.js
 npm.cmd test --prefix functions
 npm.cmd run build
 ```

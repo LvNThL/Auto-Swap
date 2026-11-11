@@ -5,6 +5,7 @@ const { initializeApp } = require('firebase-admin/app')
 const { getFirestore, Timestamp } = require('firebase-admin/firestore')
 const { getStorage } = require('firebase-admin/storage')
 const { normalizeExchangeFlow, normalizeLimitEstimate, quoteMatchesExchange, quoteMatchesPreset, quoteExpired, getQuoteExpiresAt } = require('./quote-validation')
+const { buildCreateExchangeBody } = require('./create-exchange-request')
 const { normalizeCurrencyCatalog } = require('./currency-catalog')
 const {
   depositReceived,
@@ -666,21 +667,7 @@ exports.createSwapTunnel = onCall(
     try {
       result = await callChangeNow('', {
         method: 'POST',
-        body: {
-          fromCurrency: exchange.fromCurrency,
-          fromNetwork: exchange.fromNetwork,
-          toCurrency: exchange.toCurrency,
-          toNetwork: exchange.toNetwork,
-          fromAmount: exchange.fromAmount,
-          address: toAddress,
-          ...(exchange.toExtraId ? { extraId: exchange.toExtraId } : {}),
-          ...(exchange.refundAddress ? { refundAddress: exchange.refundAddress } : {}),
-          ...(exchange.refundExtraId ? { refundExtraId: exchange.refundExtraId } : {}),
-          flow: exchange.flow,
-          ...(exchange.limitEstimate ? { limitEstimate: exchange.limitEstimate } : {}),
-          ...(exchange.flow === 'fixed-rate' ? { rateId: quote.rateId } : {}),
-          type: 'direct',
-        },
+        body: buildCreateExchangeBody(exchange, toAddress, quote),
       })
     } catch (providerError) {
       if (isConfirmedCreateFailure(providerError)) await releaseTunnelSlot(uid, quoteId)

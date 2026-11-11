@@ -9,6 +9,7 @@ import {
   deleteAddressBookEntry,
   listAddressBookEntries,
 } from '../services/AddressBookManager.js'
+import { isValidLimitEstimate } from '../services/limit-estimate.js'
 import { createPreset, deletePreset, listPresets, updatePreset } from '../services/PresetManager.js'
 
 const emptyPreset = {
@@ -1087,11 +1088,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       return
     }
     const requestedLimitEstimate = limitEstimate.trim()
-    if (requestedLimitEstimate && (
-      !/^\d+(?:\.\d+)?$/.test(requestedLimitEstimate)
-      || Number(requestedLimitEstimate) < 97
-      || Number(requestedLimitEstimate) > 150
-    )) {
+    if (!isValidLimitEstimate(requestedLimitEstimate)) {
       setError('Minimum payout must be a decimal percentage from 97 to 150.')
       return
     }
