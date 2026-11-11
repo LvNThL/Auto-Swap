@@ -4,7 +4,7 @@ const { defineSecret } = require('firebase-functions/params')
 const { initializeApp } = require('firebase-admin/app')
 const { getFirestore, Timestamp } = require('firebase-admin/firestore')
 const { getStorage } = require('firebase-admin/storage')
-const { normalizeExchangeFlow, quoteMatchesExchange, quoteMatchesPreset, quoteExpired, getQuoteExpiresAt } = require('./quote-validation')
+const { normalizeExchangeFlow, normalizeLimitEstimate, quoteMatchesExchange, quoteMatchesPreset, quoteExpired, getQuoteExpiresAt } = require('./quote-validation')
 const { normalizeCurrencyCatalog } = require('./currency-catalog')
 const {
   depositReceived,
@@ -405,12 +405,18 @@ function validateExchangeRequest(data = {}) {
   } catch {
     throw new HttpsError('invalid-argument', 'Rate flow must be standard or fixed-rate.')
   }
+  let limitEstimate
+  try {
+    limitEstimate = normalizeLimitEstimate(data.limitEstimate, flow)
+  } catch (error) {
+    throw new HttpsError('invalid-argument', error.message)
+  }
 
   if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(fromAmount) || !Number.isFinite(Number(fromAmount)) || Number(fromAmount) <= 0) {
     throw new HttpsError('invalid-argument', 'Amount must be a positive decimal value.')
   }
 
-  return { fromCurrency, fromNetwork, toCurrency, toNetwork, fromAmount, toAddress, toExtraId, refundAddress, refundExtraId, flow }
+  return { fromCurrency, fromNetwork, toCurrency, toNetwork, fromAmount, toAddress, toExtraId, refundAddress, refundExtraId, flow, limitEstimate }
 }
 
 function compareDecimalStrings(left, right) {
@@ -633,6 +639,7 @@ exports.getSwapQuote = onCall(
     return {
       quoteId: quoteRef.id,
       flow: exchange.flow,
+      limitEstimate: exchange.limitEstimate,
       minimumAmount: String(minimumAmount),
       maximumAmount,
       estimatedAmount: String(estimatedAmount),
@@ -670,6 +677,7 @@ exports.createSwapTunnel = onCall(
           ...(exchange.refundAddress ? { refundAddress: exchange.refundAddress } : {}),
           ...(exchange.refundExtraId ? { refundExtraId: exchange.refundExtraId } : {}),
           flow: exchange.flow,
+          ...(exchange.limitEstimate ? { limitEstimate: exchange.limitEstimate } : {}),
           ...(exchange.flow === 'fixed-rate' ? { rateId: quote.rateId } : {}),
           type: 'direct',
         },

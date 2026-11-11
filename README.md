@@ -31,6 +31,7 @@ npm.cmd run build
 - Asset menus are searchable, show popular assets first, and distinguish same-ticker assets on different networks. Send and receive lists use ChangeNOW's direction-specific catalog flags; a quote still verifies that the selected pair and amount are currently available.
 - Destinations must be supported cryptocurrency receiving addresses, not account emails. Confirm that the receiving app supports the selected asset and network before relying on a route.
 - The app checks ChangeNOW's minimum and estimated receive amount before confirmation. The server binds tunnel creation to the authenticated user's exact route and destination quote, expires quotes after one minute, and consumes each quote once. Standard-flow estimates are still indicative, not a guaranteed quote. Confirm the API key's endpoint access and current v2 response schema before handling real funds.
+- Standard-rate routes can optionally set a minimum payout percentage (`limitEstimate`) from 97 to 150, inclusive. The setting is applied to that swap only, displayed again before tunnel creation, and omitted when left blank; fixed-rate routes do not use it.
 
 ## Static hosting
 

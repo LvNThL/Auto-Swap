@@ -175,6 +175,9 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .detail-grid div { min-width: 0; display: grid; gap: 7px; }
 .detail-grid span, .deposit-address > span, .transaction-hash > span { color: var(--muted); font-size: 11px; }
 .detail-grid strong { overflow-wrap: anywhere; font-size: 12px; font-weight: 500; }
+.slippage-setting { display: grid; gap: 7px; margin: 0 0 18px; color: var(--ink); font-size: 11px; font-weight: 600; }
+.slippage-setting input { width: min(220px, 100%); min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--input-bg); color: var(--ink); }
+.slippage-setting small { max-width: 470px; color: var(--muted); font-size: 10px; font-weight: 400; line-height: 1.5; }
 .address-value { font-family: 'IBM Plex Mono', monospace; }
 .panel-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 0; border-top: 1px solid var(--line); }
 .panel-footer p { max-width: 370px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }

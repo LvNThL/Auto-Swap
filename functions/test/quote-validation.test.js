@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { normalizeExchangeFlow, quoteMatchesExchange, quoteMatchesPreset, quoteExpired, getQuoteExpiresAt } = require('../quote-validation')
+const { normalizeExchangeFlow, normalizeLimitEstimate, quoteMatchesExchange, quoteMatchesPreset, quoteExpired, getQuoteExpiresAt } = require('../quote-validation')
 
 const exchange = {
   fromCurrency: 'eth',
@@ -21,8 +21,26 @@ test('accepts standard and fixed-rate flows and defaults to standard', () => {
   assert.throws(() => normalizeExchangeFlow('unknown'), /standard or fixed-rate/)
 })
 
+test('validates the optional standard-rate minimum payout percentage', () => {
+  assert.equal(normalizeLimitEstimate(undefined), '')
+  assert.equal(normalizeLimitEstimate(''), '')
+  assert.equal(normalizeLimitEstimate('97'), '97')
+  assert.equal(normalizeLimitEstimate('99.5'), '99.5')
+  assert.equal(normalizeLimitEstimate('150'), '150')
+  assert.equal(normalizeLimitEstimate('97.0000000000000001'), '97.0000000000000001')
+  assert.throws(() => normalizeLimitEstimate('96.9999999999999999'), /between 97 and 150/)
+  assert.throws(() => normalizeLimitEstimate('150.0000000000000001'), /between 97 and 150/)
+  for (const value of ['0', '0.00', '-1', '1e2', '99%', '99.5x', 99]) {
+    assert.throws(() => normalizeLimitEstimate(value), /positive decimal string/)
+  }
+  assert.throws(() => normalizeLimitEstimate('99', 'fixed-rate'), /only available for standard-rate/)
+})
+
 test('matches the exact route and destination from the quote', () => {
   assert.equal(quoteMatchesExchange({ ...exchange }, { ...exchange }), true)
+  assert.equal(quoteMatchesExchange({ ...exchange }, { ...exchange, limitEstimate: '' }), true)
+  assert.equal(quoteMatchesExchange({ ...exchange, limitEstimate: '99' }, { ...exchange, limitEstimate: '99' }), true)
+  assert.equal(quoteMatchesExchange({ ...exchange, limitEstimate: '99' }, { ...exchange, limitEstimate: '100' }), false)
   assert.equal(quoteMatchesExchange({ ...exchange, flow: 'fixed-rate' }, { ...exchange, flow: 'fixed-rate' }), true)
   assert.equal(quoteMatchesExchange({ ...exchange }, { ...exchange, flow: 'fixed-rate' }), false)
   assert.equal(quoteMatchesExchange({ ...exchange, flow: 'fixed-rate' }, { ...exchange }), false)

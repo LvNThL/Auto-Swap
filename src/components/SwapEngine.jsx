@@ -296,6 +296,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   const [toSearch, setToSearch] = useState('')
   const [selectedId, setSelectedId] = useState(() => initialPresetView === NEW_PRESET_VIEW ? '' : initialPresetView)
   const [form, setForm] = useState(emptyPreset)
+  const [limitEstimate, setLimitEstimate] = useState('')
   const [swapDestinationExtraId, setSwapDestinationExtraId] = useState('')
   const [swapRefundExtraId, setSwapRefundExtraId] = useState('')
   const [showNewPreset, setShowNewPreset] = useState(() => initialPresetView === NEW_PRESET_VIEW)
@@ -336,6 +337,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   function changeRateFlow(flow) {
     if (flow === form.flow || busy) return
     setForm((current) => ({ ...current, flow }))
+    setLimitEstimate('')
     setQuote(null)
     setConfirming(false)
     setError('')
@@ -939,6 +941,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
   function beginEditPreset() {
     if (!selectedPreset) return
+    setLimitEstimate('')
     setForm({
       fromCurrency: selectedPreset.fromCurrency ?? emptyPreset.fromCurrency,
       fromNetwork: selectedPreset.fromNetwork ?? emptyPreset.fromNetwork,
@@ -965,6 +968,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
   }
 
   function cancelPresetForm() {
+    setLimitEstimate('')
     setShowNewPreset(false)
     savePresetView(user.uid, selectedId)
     setEditingPresetId('')
@@ -983,6 +987,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       return
     }
     setEditingPresetId('')
+    setLimitEstimate('')
     setForm(emptyPreset)
     setFromSearch('')
     setToSearch('')
@@ -1027,6 +1032,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       setQuote(null)
       setConfirming(false)
       setNotice('')
+      setLimitEstimate('')
       setShowNewPreset(false)
       setEditingPresetId('')
       setForm(emptyPreset)
@@ -1054,7 +1060,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     }
   }
 
-  async function createTunnel(preset, quoteId, flow) {
+  async function createTunnel(preset, quoteId, flow, limitEstimateValue) {
     const create = httpsCallable(functions, 'createSwapTunnel')
     const result = await create({
       fromCurrency: preset.fromCurrency,
@@ -1067,6 +1073,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
       refundAddress: preset.refundAddress,
       refundExtraId: preset.refundAddress ? swapRefundExtraId.trim() : '',
       flow,
+      ...(limitEstimateValue ? { limitEstimate: limitEstimateValue } : {}),
       quoteId,
       presetId: preset.id,
     })
@@ -1077,6 +1084,15 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
     if (!selectedPreset) return
     if (currenciesLoading || !selectedPresetToCurrency) {
       setError('Assets are still loading. Try again shortly.')
+      return
+    }
+    const requestedLimitEstimate = limitEstimate.trim()
+    if (requestedLimitEstimate && (
+      !/^\d+(?:\.\d+)?$/.test(requestedLimitEstimate)
+      || Number(requestedLimitEstimate) < 97
+      || Number(requestedLimitEstimate) > 150
+    )) {
+      setError('Minimum payout must be a decimal percentage from 97 to 150.')
       return
     }
     setBusy(true)
@@ -1097,6 +1113,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
         refundAddress: selectedPreset.refundAddress,
         refundExtraId: selectedPreset.refundAddress ? swapRefundExtraId.trim() : '',
         flow: selectedPreset.flow ?? 'standard',
+        ...(requestedLimitEstimate ? { limitEstimate: requestedLimitEstimate } : {}),
         presetId: selectedPreset.id,
       })
       setClockNow(Date.now())
@@ -1132,7 +1149,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
 
     try {
       const flow = quote.flow ?? selectedPreset.flow ?? 'standard'
-      const created = await createTunnel(selectedPreset, quote.quoteId, flow)
+      const created = await createTunnel(selectedPreset, quote.quoteId, flow, quote.limitEstimate)
       if (!created.payinAddress) throw new Error('ChangeNOW did not return a deposit address. The exchange may not support this route.')
       const tunnelAccessExpiresAt = created.accessExpiresAt ?? Date.now() + tunnelAccessTtlMs(flow)
       setTunnel({ ...created, flow, presetId: selectedPreset.id, accessExpiresAt: tunnelAccessExpiresAt })
@@ -1197,6 +1214,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                 key={preset.id}
                 onClick={() => {
                   setSelectedId(preset.id)
+                  setLimitEstimate('')
                   setSwapDestinationExtraId('')
                   setSwapRefundExtraId('')
                   savePresetView(user.uid, preset.id)
@@ -1419,6 +1437,24 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
                   <div><span>Destination network</span><strong>{selectedPreset.toNetwork?.toUpperCase()}</strong></div>
                   <div><span>Delivery address</span><strong className="address-value">{selectedPreset.destinationAddress}</strong></div>
                 </div>
+                {selectedPreset.flow !== 'fixed-rate' && <label className="slippage-setting">
+                  Minimum payout (%)
+                  <input
+                    aria-describedby="slippage-note"
+                    autoComplete="off"
+                    inputMode="decimal"
+                    maxLength={64}
+                    onChange={(event) => {
+                      setLimitEstimate(event.target.value)
+                      setQuote(null)
+                      setConfirming(false)
+                      setError('')
+                    }}
+                    placeholder="Optional (97–150)"
+                    value={limitEstimate}
+                  />
+                  <small id="slippage-note">Optional. If set, ChangeNOW will honor at least this percentage of the estimate. Leave blank for the usual standard-rate behavior.</small>
+                </label>}
                 <div className="panel-footer"><p>ChangeNOW checks the current minimum and estimates the receive amount before any deposit tunnel is created.</p><div className="preset-actions"><button className="button button-quiet" disabled={busy} onClick={beginEditPreset} type="button">Edit preset</button><button className="button button-primary" disabled={busy} onClick={requestQuote} type="button">{busy ? 'Getting quote…' : 'Review swap'} <span aria-hidden="true">↗</span></button></div></div>
               </section>
             </>
@@ -1591,6 +1627,7 @@ export default function SwapEngine({ user, themePreference, onThemeChange, insta
               <div><dt>Send</dt><dd>{selectedPreset.fromAmount} {selectedPreset.fromCurrency?.toUpperCase()} on {selectedPreset.fromNetwork?.toUpperCase()}</dd></div>
               <div><dt>Receive</dt><dd>{selectedPreset.toCurrency?.toUpperCase()} on {selectedPreset.toNetwork?.toUpperCase()}</dd></div>
               <div><dt>Estimated receive</dt><dd>{quote.estimatedAmount} {selectedPreset.toCurrency?.toUpperCase()}</dd></div>
+              {quote.limitEstimate && <div><dt>Minimum payout</dt><dd>{quote.limitEstimate}% of the estimated receive</dd></div>}
               {estimatedRate && <div><dt>Estimated rate</dt><dd><code>{estimatedRate}</code><br />{quote.flow === 'fixed-rate' ? 'Locked for this quote.' : 'Indicative and may change.'}</dd></div>}
               <div><dt>Minimum send</dt><dd>{quote.minimumAmount} {selectedPreset.fromCurrency?.toUpperCase()}</dd></div>
               {quote.maximumAmount && <div><dt>Maximum send</dt><dd>{quote.maximumAmount} {selectedPreset.fromCurrency?.toUpperCase()}</dd></div>}
